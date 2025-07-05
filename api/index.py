@@ -295,8 +295,8 @@ def get_nfts_real(contract):
                 "contract_address": contract_address
             }), 500
         
-        # FIXED: Always use ASSETS endpoint pentru colecția specifică
-        # Listings endpoint returnează NFT-uri cross-collection de vânzare
+        # LOGIC FIX: Pentru sortare după preț, folosește DOAR listings endpoint
+        # Pentru browsing general, folosește assets endpoint
         
         # FRESH REQUEST params pentru acest contract specific
         params = {
@@ -307,19 +307,43 @@ def get_nfts_real(contract):
         
         print(f"📝 Making FRESH OKX request with params: {params}")
         
-        # ALWAYS use ASSETS endpoint pentru NFT-urile specifice colecției
-        data = make_okx_request('/api/v5/mktplace/nft/asset/list', params, contract_address)
-        endpoint_used = "assets"
+        data = None
+        endpoint_used = "none"
         
-        # Pentru sortare pe preț, încercăm listings doar ca fallback
-        if sort_by in ['price_asc', 'price_desc'] and (not data or data.get('code') != 0):
+        if sort_by in ['price_asc', 'price_desc']:
+            # Pentru sortare după preț - folosește LISTINGS (NFT-uri cu prețuri)
             sort_mapping = {
                 'price_asc': 'priceAsc',
                 'price_desc': 'priceDesc'
             }
             params['sort'] = sort_mapping[sort_by]
-            endpoint_used = "listings_fallback"
+            endpoint_used = "listings_for_price_sort"
             data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
+            
+            print(f"🏷️ Using LISTINGS endpoint pentru sortare după preț: {sort_by}")
+            
+        else:
+            # Pentru browsing general - folosește ASSETS (toate NFT-urile)
+            endpoint_used = "assets_for_browsing"
+            data = make_okx_request('/api/v5/mktplace/nft/asset/list', params, contract_address)
+            
+            print(f"📦 Using ASSETS endpoint pentru browsing general")
+        
+        # Fallback logic
+        if not data or data.get('code') != 0:
+            print(f"⚠️ Primary endpoint failed, trying fallback...")
+            
+            if endpoint_used.startswith("listings"):
+                # Dacă listings a eșuat, încearcă assets
+                fallback_params = {k: v for k, v in params.items() if k != 'sort'}
+                data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
+                endpoint_used = "assets_fallback"
+                print(f"📦 Fallback to ASSETS endpoint")
+            else:
+                # Dacă assets a eșuat, încearcă listings
+                data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
+                endpoint_used = "listings_fallback"
+                print(f"🏷️ Fallback to LISTINGS endpoint")
         
         if not data or data.get('code') != 0:
             return jsonify({
@@ -328,11 +352,15 @@ def get_nfts_real(contract):
                 "okx_response_code": data.get('code') if data else None,
                 "contract_address": contract_address,
                 "endpoint_used": endpoint_used,
+                "logic_explanation": {
+                    "requested_sort": sort_by,
+                    "endpoint_logic": "listings pentru price sort, assets pentru browsing",
+                    "fix_applied": "Use correct endpoint based on sort_by parameter"
+                },
                 "debug": {
                     "okx_response": data,
                     "params_used": params,
                     "fresh_request": True,
-                    "fix_applied": "Always use assets endpoint for collection NFTs",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }), 500
