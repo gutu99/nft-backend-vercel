@@ -312,15 +312,43 @@ def get_nfts_real(contract):
         
         if sort_by in ['price_asc', 'price_desc']:
             # Pentru sortare după preț - folosește LISTINGS (NFT-uri cu prețuri)
+            # Testăm parametrii de sortare conform documentației OKX
             sort_mapping = {
-                'price_asc': 'priceAsc',
-                'price_desc': 'priceDesc'
+                'price_asc': 'price_low_to_high',   # Încercăm standardul marketplace
+                'price_desc': 'price_high_to_low'   # Încercăm standardul marketplace
             }
-            params['sort'] = sort_mapping[sort_by]
+            
+            # Backup mapping în case standard nu funcționează
+            if sort_by not in ['price_asc', 'price_desc']:
+                sort_mapping = {
+                    'price_asc': 'priceAsc',
+                    'price_desc': 'priceDesc'
+                }
+            
+            params['sort'] = sort_mapping.get(sort_by, sort_by)
             endpoint_used = "listings_for_price_sort"
+            
+            print(f"🏷️ Using LISTINGS endpoint pentru sortare după preț: {sort_by} -> {params['sort']}")
+            
             data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
             
-            print(f"🏷️ Using LISTINGS endpoint pentru sortare după preț: {sort_by}")
+            # Dacă primul mapping nu funcționează, încearcă al doilea
+            if not data or data.get('code') != 0:
+                print(f"⚠️ Prima variantă de sortare a eșuat, încercăm backup...")
+                backup_mapping = {
+                    'price_asc': 'priceAsc',
+                    'price_desc': 'priceDesc'
+                }
+                params['sort'] = backup_mapping.get(sort_by, sort_by)
+                print(f"🔄 Backup sort parameter: {params['sort']}")
+                data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
+            
+            # Dacă nici backup-ul nu funcționează, încearcă fără sort
+            if not data or data.get('code') != 0:
+                print(f"⚠️ Backup sortare a eșuat, încercăm fără sort parameter...")
+                no_sort_params = {k: v for k, v in params.items() if k != 'sort'}
+                data = make_okx_request('/api/v5/mktplace/nft/markets/listings', no_sort_params, contract_address)
+                endpoint_used = "listings_no_sort"
             
         else:
             # Pentru browsing general - folosește ASSETS (toate NFT-urile)
@@ -490,9 +518,9 @@ def get_nfts_real(contract):
             "fresh_request": True
         }), 500
 
-@app.route('/api/debug/okx-direct/<contract>')
-def debug_okx_direct(contract):
-    """Debug OKX API cu alternative endpoints și headers"""
+@app.route('/api/debug/sort-params/<contract>')
+def debug_sort_parameters(contract):
+    """Debug diferite parametri de sortare pentru a găsi sintaxa corectă OKX"""
     try:
         is_valid, result = validate_contract_address(contract)
         if not is_valid:
@@ -500,141 +528,128 @@ def debug_okx_direct(contract):
         
         contract_address = result
         
-        # Test alternative OKX endpoints și base URLs
-        test_configs = [
-            {
-                "name": "Standard API (www.okx.com)",
-                "base_url": "https://www.okx.com",
-                "endpoint": "/api/v5/mktplace/nft/asset/list",
-                "chain": "taiko"
-            },
-            {
-                "name": "Web3 API (web3.okx.com)", 
-                "base_url": "https://web3.okx.com",
-                "endpoint": "/api/v5/mktplace/nft/asset/list",
-                "chain": "taiko"
-            },
-            {
-                "name": "Alternative chain name (Taiko)",
-                "base_url": "https://www.okx.com",
-                "endpoint": "/api/v5/mktplace/nft/asset/list", 
-                "chain": "Taiko"
-            },
-            {
-                "name": "Listings endpoint",
-                "base_url": "https://www.okx.com",
-                "endpoint": "/api/v5/mktplace/nft/markets/listings",
-                "chain": "taiko"
-            }
+        # Testează diferite variante de parametri de sortare
+        sort_variants = [
+            'priceAsc',
+            'priceDesc', 
+            'price_asc',
+            'price_desc',
+            'price_low_to_high',
+            'price_high_to_low',
+            'PRICE_ASC',
+            'PRICE_DESC',
+            'listingTimeDesc',
+            'listingTimeAsc',
+            'newest',
+            'oldest'
         ]
         
         debug_results = {
             "contract_tested": contract_address,
-            "configurations_tested": {},
-            "timestamp": datetime.utcnow().isoformat(),
-            "request_details": {}
+            "sort_variants_tested": {},
+            "recommendations": [],
+            "timestamp": datetime.utcnow().isoformat()
         }
         
-        for config in test_configs:
+        for sort_param in sort_variants:
             try:
-                print(f"🧪 Testing config: {config['name']}")
+                print(f"🧪 Testing sort parameter: {sort_param}")
                 
-                timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
                 params = {
-                    'chain': config['chain'],
+                    'chain': 'taiko',
                     'contractAddress': contract_address,
-                    'limit': '5'
+                    'limit': '3',
+                    'sort': sort_param
                 }
                 
-                query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
-                signature = create_okx_signature(timestamp, 'GET', config['endpoint'], '', query_string)
-                
-                headers = {
-                    'OK-ACCESS-KEY': OKX_API_KEY,
-                    'OK-ACCESS-SIGN': signature,
-                    'OK-ACCESS-TIMESTAMP': timestamp,
-                    'OK-ACCESS-PASSPHRASE': OKX_PASSPHRASE,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'OKX-NFT-Backend/2.0'
-                }
-                
-                url = f"{config['base_url']}{config['endpoint']}?{query_string}"
-                
-                # Store request details
-                debug_results["request_details"][config['name']] = {
-                    "url": url,
-                    "headers_sent": {k: v for k, v in headers.items() if k != 'OK-ACCESS-SIGN'},
-                    "params": params,
-                    "timestamp": timestamp
-                }
-                
-                print(f"📡 Request URL: {url}")
-                response = requests.get(url, headers=headers, timeout=10)
+                response = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
                 
                 result_data = {
-                    "status_code": response.status_code,
-                    "response_size": len(response.text) if response.text else 0
+                    "response_code": response.get('code') if response else None,
+                    "has_data": bool(response and response.get('data')),
+                    "nft_count": 0,
+                    "first_token_id": None,
+                    "has_prices": False
                 }
                 
-                if response.status_code == 200:
-                    try:
-                        json_response = response.json()
-                        result_data["response_code"] = json_response.get('code')
-                        result_data["has_data"] = 'data' in json_response
+                if response and response.get('data'):
+                    data = response['data']
+                    if isinstance(data, dict) and 'data' in data:
+                        nfts = data['data']
+                    else:
+                        nfts = data if isinstance(data, list) else []
+                    
+                    result_data["nft_count"] = len(nfts)
+                    
+                    if nfts:
+                        first_nft = nfts[0]
+                        result_data["first_token_id"] = first_nft.get('tokenId')
+                        result_data["has_prices"] = bool(first_nft.get('price'))
                         
-                        # Analyze NFT data
-                        if json_response.get('data'):
-                            data = json_response['data']
-                            if isinstance(data, dict) and 'data' in data:
-                                nfts = data['data']
-                            else:
-                                nfts = data if isinstance(data, list) else []
+                        # Check if sorting actually works
+                        if len(nfts) > 1:
+                            prices = []
+                            for nft in nfts:
+                                price = nft.get('price')
+                                if price:
+                                    try:
+                                        prices.append(float(price))
+                                    except:
+                                        pass
                             
-                            result_data["nft_count"] = len(nfts)
-                            if nfts:
-                                first_nft = nfts[0]
-                                result_data["first_nft"] = {
-                                    "tokenId": first_nft.get('tokenId'),
-                                    "name": first_nft.get('name'), 
-                                    "orderId": first_nft.get('orderId'),
-                                    "seller": first_nft.get('seller'),
-                                    "price": first_nft.get('price')
+                            if len(prices) > 1:
+                                is_ascending = prices == sorted(prices)
+                                is_descending = prices == sorted(prices, reverse=True)
+                                result_data["price_order"] = {
+                                    "ascending": is_ascending,
+                                    "descending": is_descending,
+                                    "prices": prices[:3]  # First 3 prices for inspection
                                 }
-                                
-                                # Check for uniqueness
-                                unique_tokens = set(nft.get('tokenId') for nft in nfts)
-                                result_data["unique_token_count"] = len(unique_tokens)
-                                result_data["all_token_ids"] = [nft.get('tokenId') for nft in nfts]
-                        
-                        # Store partial response for analysis
-                        if config['name'] == "Standard API (www.okx.com)":
-                            debug_results["sample_response"] = {
-                                "code": json_response.get('code'),
-                                "data_type": type(json_response.get('data')).__name__,
-                                "raw_sample": json_response
-                            }
-                            
-                    except Exception as json_error:
-                        result_data["json_error"] = str(json_error)
-                        result_data["raw_text"] = response.text[:500]
-                else:
-                    result_data["error_text"] = response.text[:200]
                 
-                debug_results["configurations_tested"][config['name']] = result_data
+                debug_results["sort_variants_tested"][sort_param] = result_data
+                
+                # Add to recommendations if it works
+                if (result_data.get("response_code") == 0 and 
+                    result_data.get("nft_count", 0) > 0 and 
+                    result_data.get("has_prices")):
+                    debug_results["recommendations"].append({
+                        "sort_param": sort_param,
+                        "reason": "Returns data with prices",
+                        "nft_count": result_data["nft_count"]
+                    })
                 
             except Exception as e:
-                debug_results["configurations_tested"][config['name']] = {
+                debug_results["sort_variants_tested"][sort_param] = {
                     "error": str(e)
                 }
+        
+        # Test fără sort parameter
+        try:
+            params_no_sort = {
+                'chain': 'taiko',
+                'contractAddress': contract_address,
+                'limit': '3'
+            }
+            
+            response_no_sort = make_okx_request('/api/v5/mktplace/nft/markets/listings', params_no_sort, contract_address)
+            
+            debug_results["no_sort_test"] = {
+                "response_code": response_no_sort.get('code') if response_no_sort else None,
+                "has_data": bool(response_no_sort and response_no_sort.get('data')),
+                "note": "Baseline test without sort parameter"
+            }
+            
+        except Exception as e:
+            debug_results["no_sort_test"] = {"error": str(e)}
         
         return jsonify({
             "success": True,
             "debug_data": debug_results,
-            "analysis": {
+            "summary": {
+                "total_variants_tested": len(sort_variants),
+                "working_variants": len(debug_results["recommendations"]),
                 "contract": contract_address,
-                "total_configs_tested": len(test_configs),
-                "okx_api_keys_configured": bool(OKX_API_KEY and OKX_SECRET_KEY),
-                "recommendation": "Check if any config returns different tokenIds"
+                "best_recommendations": debug_results["recommendations"][:3]
             }
         })
         
