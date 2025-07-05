@@ -311,24 +311,44 @@ def get_nfts_real(contract):
         endpoint_used = "none"
         
         if sort_by in ['price_asc', 'price_desc']:
-            # PARAMETRI CORECȚI conform debug test results
+            # Pentru sortare după preț - folosește LISTINGS (NFT-uri cu prețuri)
+            # Testăm parametrii de sortare conform documentației OKX
             sort_mapping = {
-                'price_asc': 'priceAsc',           # ✅ Funcționează conform debug
-                'price_desc': 'price_high_to_low'  # ✅ Funcționează conform debug
+                'price_asc': 'price_low_to_high',   # Încercăm standardul marketplace
+                'price_desc': 'price_high_to_low'   # Încercăm standardul marketplace
             }
             
-            params['sort'] = sort_mapping[sort_by]
+            # Backup mapping în case standard nu funcționează
+            if sort_by not in ['price_asc', 'price_desc']:
+                sort_mapping = {
+                    'price_asc': 'priceAsc',
+                    'price_desc': 'priceDesc'
+                }
+            
+            params['sort'] = sort_mapping.get(sort_by, sort_by)
             endpoint_used = "listings_for_price_sort"
             
-            print(f"🏷️ Using LISTINGS endpoint cu parametrii CORECȚI: {sort_by} -> {params['sort']}")
+            print(f"🏷️ Using LISTINGS endpoint pentru sortare după preț: {sort_by} -> {params['sort']}")
             
             data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
             
-            # Verifică dacă sorting-ul funcționează
-            if data and data.get('code') == 0:
-                print(f"✅ Sort successful cu parametrul: {params['sort']}")
-            else:
-                print(f"❌ Sort failed cu parametrul: {params['sort']}, cod răspuns: {data.get('code') if data else 'None'}")
+            # Dacă primul mapping nu funcționează, încearcă al doilea
+            if not data or data.get('code') != 0:
+                print(f"⚠️ Prima variantă de sortare a eșuat, încercăm backup...")
+                backup_mapping = {
+                    'price_asc': 'priceAsc',
+                    'price_desc': 'priceDesc'
+                }
+                params['sort'] = backup_mapping.get(sort_by, sort_by)
+                print(f"🔄 Backup sort parameter: {params['sort']}")
+                data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
+            
+            # Dacă nici backup-ul nu funcționează, încearcă fără sort
+            if not data or data.get('code') != 0:
+                print(f"⚠️ Backup sortare a eșuat, încercăm fără sort parameter...")
+                no_sort_params = {k: v for k, v in params.items() if k != 'sort'}
+                data = make_okx_request('/api/v5/mktplace/nft/markets/listings', no_sort_params, contract_address)
+                endpoint_used = "listings_no_sort"
             
         else:
             # Pentru browsing general - folosește ASSETS (toate NFT-urile)
@@ -383,45 +403,8 @@ def get_nfts_real(contract):
         print(f"✅ Received {len(nfts)} NFTs for contract {contract_address}")
         
         # EXTRA FILTER: Pentru listings endpoint, filtrează MANUAL după contract
-       # MANUAL FILTER: Filtrează NFT-uri să aparțină DOAR contractului specificat
-if endpoint_used.startswith("listings"):
-    original_count = len(nfts)
-    
-    # Filtrează NFT-uri după contract address
-    filtered_nfts = []
-    for nft in nfts:
-        nft_contract = (
-            nft.get('assetContract', {}).get('contractAddress', '') or
-            nft.get('contractAddress', '') or
-            nft.get('collection', {}).get('assetContracts', [{}])[0].get('contractAddress', '') if 
-            nft.get('collection', {}).get('assetContracts') else ''
-        ).lower()
-        
-        if nft_contract == contract_address.lower():
-            filtered_nfts.append(nft)
-            print(f"✅ Keeping NFT {nft.get('tokenId')} from correct contract")
-        else:
-            print(f"❌ Filtering out NFT {nft.get('tokenId')} from wrong contract: {nft_contract}")
-    
-    nfts = filtered_nfts
-    filtered_count = len(nfts)
-    print(f"🔍 MANUAL FILTER: {original_count} -> {filtered_count} NFTs după filtrare pe contract")
-    
-    # Dacă nu găsim NFT-uri din contractul nostru în listings, fallback la assets
-    if filtered_count == 0:
-        print(f"⚠️ No listings found for contract {contract_address}, falling back to assets")
-        fallback_params = {k: v for k, v in params.items() if k != 'sort'}
-        data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
-        
-        if data and data.get('code') == 0:
-            response_data = data.get('data', {})
-            if isinstance(response_data, dict) and 'data' in response_data:
-                nfts = response_data['data']
-            else:
-                nfts = response_data if isinstance(response_data, list) else []
-            endpoint_used = "assets_fallback_no_listings"
-            print(f"📦 Fallback successful: {len(nfts)} NFTs from assets")
-            """
+        if endpoint_used.startswith("listings"):
+            original_count = len(nfts)
             # Filtrează NFT-uri care NU aparțin contractului nostru
             nfts = [
                 nft for nft in nfts 
@@ -430,10 +413,9 @@ if endpoint_used.startswith("listings"):
             ]
             filtered_count = len(nfts)
             print(f"🔍 MANUAL FILTER: {original_count} -> {filtered_count} NFTs după filtrare pe contract")
-            """
             
             # Dacă nu găsim NFT-uri din contractul nostru în listings, fallback la assets
-            if len(nfts) == 0:
+            if filtered_count == 0:
                 print(f"⚠️ No listings found for contract {contract_address}, falling back to assets")
                 fallback_params = {k: v for k, v in params.items() if k != 'sort'}
                 data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
