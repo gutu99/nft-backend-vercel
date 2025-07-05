@@ -220,7 +220,7 @@ def test():
     try:
         if OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE:
             # Test cu un contract cunoscut - FRESH REQUEST
-            test_contract = "0xa20a8856e00f5ad024a55a663f06dcc419ffc4d5"
+            test_contract = ""
             params = {
                 'chain': 'taiko',
                 'contractAddress': test_contract,
@@ -760,8 +760,8 @@ def not_found(error):
             "/api/debug/sort-params/<contract>"
         ],
         "example_urls": [
-            "/api/nfts/0xa20a8856e00f5ad024a55a663f06dcc419ffc4d5",
-            "/api/debug/sort-params/0xa20a8856e00f5ad024a55a663f06dcc419ffc4d5"
+            "/api/nfts/",
+            "/api/debug/sort-params/"
         ],
         "deployment": "vercel",
         "version": "2.2.0-fixed-sorting"
