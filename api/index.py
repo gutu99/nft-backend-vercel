@@ -383,8 +383,12 @@ def get_nfts_real(contract):
         print(f"✅ Received {len(nfts)} NFTs for contract {contract_address}")
         
         # EXTRA FILTER: Pentru listings endpoint, filtrează MANUAL după contract
+        # TEMPORAR DISABLED pentru debugging
         if endpoint_used.startswith("listings"):
             original_count = len(nfts)
+            print(f"🔍 MANUAL FILTER DISABLED: Keeping all {original_count} NFTs pentru debugging")
+            # COMMENTED OUT manual filtering pentru a vedea dacă asta elimină NFT-urile cu prețuri
+            """
             # Filtrează NFT-uri care NU aparțin contractului nostru
             nfts = [
                 nft for nft in nfts 
@@ -393,9 +397,10 @@ def get_nfts_real(contract):
             ]
             filtered_count = len(nfts)
             print(f"🔍 MANUAL FILTER: {original_count} -> {filtered_count} NFTs după filtrare pe contract")
+            """
             
             # Dacă nu găsim NFT-uri din contractul nostru în listings, fallback la assets
-            if filtered_count == 0:
+            if len(nfts) == 0:
                 print(f"⚠️ No listings found for contract {contract_address}, falling back to assets")
                 fallback_params = {k: v for k, v in params.items() if k != 'sort'}
                 data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
