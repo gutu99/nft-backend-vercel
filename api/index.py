@@ -1,66 +1,82 @@
-from flask import Flask, jsonify, request
-import requests
-import hmac
-import hashlib
-import base64
-import json
+from flask import Flask, jsonify
 import os
 from datetime import datetime
-import re
 
 # Create Flask app
 app = Flask(__name__)
 
-# Enable CORS
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
+@app.route('/')
+def root():
+    return jsonify({
+        "status": "working",
+        "message": "Vercel Flask is alive!",
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
-# OKX Configuration
-OKX_API_KEY = os.getenv('OKX_API_KEY', '0321b6d3-385f-428e-9516-d3f1cb013f99')
-OKX_SECRET_KEY = os.getenv('OKX_SECRET_KEY', '6C366DF95B6F365B73483A63339E0F27')
-OKX_PASSPHRASE = os.getenv('OKX_PASSPHRASE', '462230Gutu99!')
+@app.route('/api')
+def api():
+    return jsonify({
+        "status": "healthy",
+        "service": "NFT Backend",
+        "deployment": "vercel",
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
-def validate_contract_address(address):
-    if not address or not isinstance(address, str):
-        return False, "Contract address invalid"
-    
-    address = address.strip()
-    if not address.startswith('0x') or len(address) != 42:
-        return False, "Contract address format invalid"
-    
-    if not re.match(r'^0x[a-fA-F0-9]{40}$', address):
-        return False, "Contract address contains invalid characters"
-    
-    return True, address.lower()
+@app.route('/api/test')
+def test():
+    return jsonify({
+        "success": True,
+        "message": "Test working!",
+        "environment": {
+            "python_version": "3.9+",
+            "flask_working": True,
+            "vercel_deployment": True
+        }
+    })
 
-def create_okx_signature(timestamp, method, request_path, body='', query_string=''):
-    try:
-        if query_string:
-            prehash = f'{timestamp}{method}{request_path}?{query_string}{body}'
-        else:
-            prehash = f'{timestamp}{method}{request_path}{body}'
-            
-        signature = base64.b64encode(
-            hmac.new(
-                OKX_SECRET_KEY.encode('utf-8'),
-                prehash.encode('utf-8'),
-                hashlib.sha256
-            ).digest()
-        ).decode('utf-8')
-        return signature
-    except Exception:
-        return ""
+# Minimal NFT endpoint pentru test
+@app.route('/api/nfts/<contract>')
+def get_nfts_minimal(contract):
+    # Doar un răspuns simplu pentru test
+    return jsonify({
+        "success": True,
+        "contract": contract,
+        "message": "NFT endpoint working",
+        "data": [
+            {
+                "tokenId": "1",
+                "name": "Test NFT #1",
+                "price": "0.1",
+                "status": "listed"
+            },
+            {
+                "tokenId": "2", 
+                "name": "Test NFT #2",
+                "price": "0.2",
+                "status": "listed"
+            }
+        ],
+        "deployment": "vercel"
+    })
 
-def make_okx_request(endpoint, params=None):
-    try:
-        timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-        query_string = '&'.join([f"{k}={v}" for k, v in params.items()]) if params else ''
-        
-        signature = create_okx_signature(timestamp, 'GET', endpoint, '', query_string)
-        
-        headers = {
-            '
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "error": "Not found",
+        "available_endpoints": [
+            "/",
+            "/api", 
+            "/api/test",
+            "/api/nfts/<contract>"
+        ]
+    }), 404
+
+@app.errorhandler(500)
+def server_error(error):
+    return jsonify({
+        "error": "Server error",
+        "message": str(error)
+    }), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
