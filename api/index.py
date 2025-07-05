@@ -295,6 +295,9 @@ def get_nfts_real(contract):
                 "contract_address": contract_address
             }), 500
         
+        # FIXED: Always use ASSETS endpoint pentru colecția specifică
+        # Listings endpoint returnează NFT-uri cross-collection de vânzare
+        
         # FRESH REQUEST params pentru acest contract specific
         params = {
             'chain': 'taiko',
@@ -304,25 +307,19 @@ def get_nfts_real(contract):
         
         print(f"📝 Making FRESH OKX request with params: {params}")
         
-        # Încearcă listings endpoint pentru sorting - FRESH REQUEST
-        data = None
-        endpoint_used = "none"
+        # ALWAYS use ASSETS endpoint pentru NFT-urile specifice colecției
+        data = make_okx_request('/api/v5/mktplace/nft/asset/list', params, contract_address)
+        endpoint_used = "assets"
         
-        if sort_by in ['price_asc', 'price_desc']:
+        # Pentru sortare pe preț, încercăm listings doar ca fallback
+        if sort_by in ['price_asc', 'price_desc'] and (not data or data.get('code') != 0):
             sort_mapping = {
                 'price_asc': 'priceAsc',
                 'price_desc': 'priceDesc'
             }
             params['sort'] = sort_mapping[sort_by]
-            endpoint_used = "listings"
+            endpoint_used = "listings_fallback"
             data = make_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
-        
-        # Fallback la assets endpoint - FRESH REQUEST
-        if not data or data.get('code') != 0:
-            # Remove sort param pentru assets endpoint
-            assets_params = {k: v for k, v in params.items() if k != 'sort'}
-            endpoint_used = "assets"
-            data = make_okx_request('/api/v5/mktplace/nft/asset/list', assets_params, contract_address)
         
         if not data or data.get('code') != 0:
             return jsonify({
@@ -335,6 +332,7 @@ def get_nfts_real(contract):
                     "okx_response": data,
                     "params_used": params,
                     "fresh_request": True,
+                    "fix_applied": "Always use assets endpoint for collection NFTs",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }), 500
