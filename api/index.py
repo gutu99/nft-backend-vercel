@@ -383,11 +383,44 @@ def get_nfts_real(contract):
         print(f"✅ Received {len(nfts)} NFTs for contract {contract_address}")
         
         # EXTRA FILTER: Pentru listings endpoint, filtrează MANUAL după contract
-        # TEMPORAR DISABLED pentru debugging
-        if endpoint_used.startswith("listings"):
-            original_count = len(nfts)
-            print(f"🔍 MANUAL FILTER DISABLED: Keeping all {original_count} NFTs pentru debugging")
-            # COMMENTED OUT manual filtering pentru a vedea dacă asta elimină NFT-urile cu prețuri
+       # MANUAL FILTER: Filtrează NFT-uri să aparțină DOAR contractului specificat
+if endpoint_used.startswith("listings"):
+    original_count = len(nfts)
+    
+    # Filtrează NFT-uri după contract address
+    filtered_nfts = []
+    for nft in nfts:
+        nft_contract = (
+            nft.get('assetContract', {}).get('contractAddress', '') or
+            nft.get('contractAddress', '') or
+            nft.get('collection', {}).get('assetContracts', [{}])[0].get('contractAddress', '') if 
+            nft.get('collection', {}).get('assetContracts') else ''
+        ).lower()
+        
+        if nft_contract == contract_address.lower():
+            filtered_nfts.append(nft)
+            print(f"✅ Keeping NFT {nft.get('tokenId')} from correct contract")
+        else:
+            print(f"❌ Filtering out NFT {nft.get('tokenId')} from wrong contract: {nft_contract}")
+    
+    nfts = filtered_nfts
+    filtered_count = len(nfts)
+    print(f"🔍 MANUAL FILTER: {original_count} -> {filtered_count} NFTs după filtrare pe contract")
+    
+    # Dacă nu găsim NFT-uri din contractul nostru în listings, fallback la assets
+    if filtered_count == 0:
+        print(f"⚠️ No listings found for contract {contract_address}, falling back to assets")
+        fallback_params = {k: v for k, v in params.items() if k != 'sort'}
+        data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
+        
+        if data and data.get('code') == 0:
+            response_data = data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                nfts = response_data['data']
+            else:
+                nfts = response_data if isinstance(response_data, list) else []
+            endpoint_used = "assets_fallback_no_listings"
+            print(f"📦 Fallback successful: {len(nfts)} NFTs from assets")
             """
             # Filtrează NFT-uri care NU aparțin contractului nostru
             nfts = [
