@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.9"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
+  ],
+  "env": {
+    "OKX_API_KEY": "@okx_api_key",
+    "OKX_SECRET_KEY": "@okx_secret_key", 
+    "OKX_PASSPHRASE": "@okx_passphrase"
+  },
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 30
+    }
+  }
+}
