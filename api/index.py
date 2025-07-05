@@ -374,12 +374,45 @@ def get_nfts_real(contract):
         
         print(f"✅ Received {len(nfts)} NFTs for contract {contract_address}")
         
+        # EXTRA FILTER: Pentru listings endpoint, filtrează MANUAL după contract
+        if endpoint_used.startswith("listings"):
+            original_count = len(nfts)
+            # Filtrează NFT-uri care NU aparțin contractului nostru
+            nfts = [
+                nft for nft in nfts 
+                if (nft.get('assetContract', {}).get('contractAddress', '').lower() == contract_address.lower() or
+                    nft.get('contractAddress', '').lower() == contract_address.lower())
+            ]
+            filtered_count = len(nfts)
+            print(f"🔍 MANUAL FILTER: {original_count} -> {filtered_count} NFTs după filtrare pe contract")
+            
+            # Dacă nu găsim NFT-uri din contractul nostru în listings, fallback la assets
+            if filtered_count == 0:
+                print(f"⚠️ No listings found for contract {contract_address}, falling back to assets")
+                fallback_params = {k: v for k, v in params.items() if k != 'sort'}
+                data = make_okx_request('/api/v5/mktplace/nft/asset/list', fallback_params, contract_address)
+                
+                if data and data.get('code') == 0:
+                    response_data = data.get('data', {})
+                    if isinstance(response_data, dict) and 'data' in response_data:
+                        nfts = response_data['data']
+                    else:
+                        nfts = response_data if isinstance(response_data, list) else []
+                    endpoint_used = "assets_fallback_no_listings"
+                    print(f"📦 Fallback successful: {len(nfts)} NFTs from assets")
+        
         # Verifică dacă datele sunt specifice contractului
         if len(nfts) > 0:
             first_nft = nfts[0]
             print(f"📊 First NFT: {first_nft.get('name', 'No name')} - TokenID: {first_nft.get('tokenId', 'No ID')}")
-        
-        # Procesează NFT-urile - FRESH DATA
+            
+            # Check contract consistency
+            first_contract = (first_nft.get('assetContract', {}).get('contractAddress') or 
+                            first_nft.get('contractAddress') or '').lower()
+            if first_contract and first_contract != contract_address.lower():
+                print(f"⚠️ WARNING: First NFT belongs to different contract: {first_contract}")
+        else:
+            print(f"❌ No NFTs received for contract {contract_address}")
         processed_nfts = []
         for i, nft in enumerate(nfts[:limit]):
             try:
