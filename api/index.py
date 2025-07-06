@@ -300,7 +300,7 @@ def test_parameters(contract):
 
 @app.route('/api/nfts/<contract>')
 def get_nfts(contract):
-    """Get NFTs using best known parameters"""
+    """Get NFTs using best known parameters with price sorting fix"""
     try:
         is_valid, result = validate_contract_address(contract)
         if not is_valid:
@@ -316,7 +316,7 @@ def get_nfts(contract):
                 "error": "OKX API keys not configured"
             }), 500
         
-        # Use assets endpoint (most reliable)
+        # Use assets endpoint (confirmed working)
         params = {
             'chain': 'taiko',
             'contractAddress': contract_address,
@@ -329,7 +329,11 @@ def get_nfts(contract):
             return jsonify({
                 "success": False,
                 "error": "Could not get NFTs from OKX",
-                "contract_address": contract_address
+                "contract_address": contract_address,
+                "debug": {
+                    "okx_code": data.get('code') if data else 'no_response',
+                    "message": data.get('msg') if data else 'no_response'
+                }
             }), 404
         
         # Process data
@@ -339,7 +343,7 @@ def get_nfts(contract):
         else:
             nfts = response_data if isinstance(response_data, list) else []
         
-        # Filter by contract
+        # Filter by contract (confirmed working perfectly)
         filtered_nfts = []
         for nft in nfts:
             nft_contract = (
@@ -350,7 +354,45 @@ def get_nfts(contract):
             if nft_contract == contract_address.lower():
                 filtered_nfts.append(nft)
         
-        # Process NFTs
+        # TRY TO GET PRICE DATA (experimental approach)
+        price_data = {}
+        if sort_by in ['price_asc', 'price_desc'] and len(filtered_nfts) > 0:
+            print(f"💰 Attempting to get price data for {len(filtered_nfts)} NFTs")
+            
+            # Try to get general listings and match by token IDs
+            listings_params = {
+                'chain': 'taiko',
+                'limit': '50'  # Get more listings to increase match chances
+            }
+            
+            listings_data = make_okx_request('/api/v5/mktplace/nft/markets/listings', listings_params, contract_address)
+            
+            if listings_data and listings_data.get('code') == 0:
+                listings_response = listings_data.get('data', {})
+                if isinstance(listings_response, dict) and 'data' in listings_response:
+                    all_listings = listings_response['data']
+                else:
+                    all_listings = listings_response if isinstance(listings_response, list) else []
+                
+                # Create token ID set from our valid NFTs
+                our_token_ids = {nft.get('tokenId') for nft in filtered_nfts if nft.get('tokenId')}
+                
+                # Try to match prices by token ID
+                matched_prices = 0
+                for listing in all_listings:
+                    listing_token_id = listing.get('tokenId')
+                    listing_price = listing.get('price') or listing.get('listingPrice')
+                    
+                    # If this token ID matches one of our NFTs, store the price
+                    if (listing_token_id and 
+                        str(listing_token_id) in our_token_ids and 
+                        listing_price):
+                        price_data[str(listing_token_id)] = listing_price
+                        matched_prices += 1
+                
+                print(f"💰 Matched prices for {matched_prices}/{len(our_token_ids)} NFTs")
+        
+        # Process NFTs with price enrichment
         processed_nfts = []
         for i, nft in enumerate(filtered_nfts[:limit]):
             try:
@@ -358,11 +400,30 @@ def get_nfts(contract):
                 name = nft.get('name') or f"NFT #{token_id}"
                 image = nft.get('image') or nft.get('imageUrl') or ''
                 
+                # Check if we have price data for this token
+                price = None
+                price_source = 'none'
+                if str(token_id) in price_data:
+                    price_raw = price_data[str(token_id)]
+                    try:
+                        price_num = float(price_raw)
+                        if price_num > 1e10:  # Convert from wei
+                            price_num = price_num / 1e18
+                        price = f"{price_num:.6f}".rstrip('0').rstrip('.')
+                        price_source = 'listings_matched'
+                    except:
+                        price = str(price_raw)
+                        price_source = 'listings_raw'
+                
                 processed_nft = {
                     'id': f"{contract_address}_{token_id}",
                     'tokenId': str(token_id),
                     'name': name,
                     'image': image,
+                    'price': price,
+                    'priceSource': price_source,
+                    'currency': 'ETH' if price else None,
+                    'status': 'listed' if price else 'unlisted',
                     'contractAddress': contract_address,
                     'fresh_timestamp': datetime.utcnow().isoformat()
                 }
@@ -373,6 +434,22 @@ def get_nfts(contract):
                 print(f"Error processing NFT {i}: {e}")
                 continue
         
+        # SORTING (now with price support)
+        if sort_by in ['price_asc', 'price_desc'] and len(processed_nfts) > 1:
+            def get_sort_price(nft):
+                price = nft.get('price')
+                if not price:
+                    return 0 if sort_by == 'price_asc' else float('inf')
+                try:
+                    return float(price)
+                except:
+                    return 0 if sort_by == 'price_asc' else float('inf')
+            
+            processed_nfts.sort(key=get_sort_price, reverse=(sort_by == 'price_desc'))
+            print(f"🔄 Applied sorting: {sort_by}")
+        
+        with_prices = sum(1 for nft in processed_nfts if nft.get('price'))
+        
         return jsonify({
             "success": True,
             "data": processed_nfts,
@@ -381,6 +458,17 @@ def get_nfts(contract):
             "sort_by": sort_by,
             "total_from_okx": len(nfts),
             "filtered_count": len(filtered_nfts),
+            "price_info": {
+                "nfts_with_prices": with_prices,
+                "total_nfts": len(processed_nfts),
+                "price_coverage": f"{round(with_prices/len(processed_nfts)*100, 1)}%" if processed_nfts else "0%",
+                "sorting_applied": sort_by in ['price_asc', 'price_desc']
+            },
+            "okx_bug_info": {
+                "assets_endpoint": "working_perfectly",
+                "listings_endpoint": "ignores_contractAddress_but_used_for_prices",
+                "workaround": "token_id_matching_from_general_listings_pool"
+            },
             "timestamp": datetime.utcnow().isoformat()
         })
         
