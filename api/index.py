@@ -1,4 +1,204 @@
-from flask import Flask, jsonify, request
+@app.route('/api/test-new-endpoints/<contract>')
+def test_new_endpoints(contract):
+    """Test the new query-listing and query-offer endpoints from OKX docs"""
+    try:
+        is_valid, result = validate_contract_address(contract)
+        if not is_valid:
+            return jsonify({'success': False, 'error': result}), 400
+        
+        contract_address = result
+        
+        if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
+            return jsonify({
+                "success": False,
+                "error": "OKX API keys not configured"
+            }), 500
+        
+        # Test the new endpoints from OKX documentation
+        new_endpoints_tests = [
+            {
+                "name": "query_listing_basic",
+                "endpoint": "/api/v5/mktplace/nft/markets/query-listing",
+                "params": {
+                    'chain': 'taiko',
+                    'limit': '10'
+                }
+            },
+            {
+                "name": "query_listing_with_contract",
+                "endpoint": "/api/v5/mktplace/nft/markets/query-listing",
+                "params": {
+                    'chain': 'taiko',
+                    'contractAddress': contract_address,
+                    'limit': '10'
+                }
+            },
+            {
+                "name": "query_listing_with_collection",
+                "endpoint": "/api/v5/mktplace/nft/markets/query-listing",
+                "params": {
+                    'chain': 'taiko',
+                    'collectionAddress': contract_address,
+                    'limit': '10'
+                }
+            },
+            {
+                "name": "query_offer_basic",
+                "endpoint": "/api/v5/mktplace/nft/markets/query-offer",
+                "params": {
+                    'chain': 'taiko',
+                    'limit': '10'
+                }
+            },
+            {
+                "name": "query_offer_with_contract",
+                "endpoint": "/api/v5/mktplace/nft/markets/query-offer",
+                "params": {
+                    'chain': 'taiko',
+                    'contractAddress': contract_address,
+                    'limit': '10'
+                }
+            },
+            {
+                "name": "old_listings_for_comparison",
+                "endpoint": "/api/v5/mktplace/nft/markets/listings",
+                "params": {
+                    'chain': 'taiko',
+                    'limit': '10'
+                }
+            }
+        ]
+        
+        results = {}
+        
+        for test in new_endpoints_tests:
+            test_name = test["name"]
+            endpoint = test["endpoint"]
+            params = test["params"]
+            
+            print(f"🧪 Testing NEW endpoint: {test_name}")
+            print(f"📡 Endpoint: {endpoint}")
+            print(f"📝 Params: {params}")
+            
+            data = make_okx_request(endpoint, params, contract_address)
+            
+            if not data:
+                results[test_name] = {
+                    "status": "no_response",
+                    "endpoint": endpoint,
+                    "params": params
+                }
+                continue
+            
+            if data.get('code') != 0:
+                results[test_name] = {
+                    "status": "error",
+                    "okx_code": data.get('code'),
+                    "okx_message": data.get('msg', ''),
+                    "endpoint": endpoint,
+                    "params": params
+                }
+                continue
+            
+            # Process response
+            response_data = data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                items = response_data['data']
+            else:
+                items = response_data if isinstance(response_data, list) else []
+            
+            # Analyze contract matching and prices
+            contract_matches = 0
+            items_with_prices = 0
+            sample_items = []
+            
+            for item in items[:5]:  # Analyze first 5
+                token_id = item.get('tokenId', 'unknown')
+                price = item.get('price') or item.get('listingPrice') or item.get('offerPrice')
+                
+                item_contract = (
+                    item.get('assetContract', {}).get('contractAddress', '') or
+                    item.get('contractAddress', '') or
+                    item.get('collectionAddress', '') or
+                    'NOT_FOUND'
+                ).lower()
+                
+                if item_contract == contract_address.lower():
+                    contract_matches += 1
+                
+                if price:
+                    items_with_prices += 1
+                
+                sample_items.append({
+                    "tokenId": token_id,
+                    "price": price,
+                    "contract": item_contract[-10:] if item_contract != 'NOT_FOUND' else 'NOT_FOUND',
+                    "contract_matches": item_contract == contract_address.lower()
+                })
+            
+            results[test_name] = {
+                "status": "success",
+                "endpoint": endpoint,
+                "params": params,
+                "okx_code": data.get('code'),
+                "total_items": len(items),
+                "contract_matches": contract_matches,
+                "items_with_prices": items_with_prices,
+                "contract_specific": contract_matches > 0,
+                "has_prices": items_with_prices > 0,
+                "sample_items": sample_items,
+                "working_well": contract_matches > 0 and items_with_prices > 0
+            }
+        
+        # Find best working endpoints
+        working_endpoints = []
+        best_endpoints = []
+        
+        for test_name, result in results.items():
+            if result.get('working_well'):
+                working_endpoints.append(test_name)
+                best_endpoints.append({
+                    "test_name": test_name,
+                    "endpoint": result['endpoint'],
+                    "params": result['params'],
+                    "contract_matches": result['contract_matches'],
+                    "items_with_prices": result['items_with_prices'],
+                    "reason": f"Returns {result['contract_matches']} contract-specific items with {result['items_with_prices']} prices"
+                })
+        
+        return jsonify({
+            "success": True,
+            "contract_tested": contract_address,
+            "new_endpoints_tested": len(new_endpoints_tests),
+            "test_results": results,
+            "analysis": {
+                "working_endpoints": working_endpoints,
+                "best_endpoints": best_endpoints,
+                "old_vs_new": {
+                    "old_listings_working": results.get("old_listings_for_comparison", {}).get("total_items", 0) > 0,
+                    "new_query_listing_working": any("query_listing" in name for name in working_endpoints),
+                    "new_query_offer_working": any("query_offer" in name for name in working_endpoints)
+                }
+            },
+            "recommendations": best_endpoints if best_endpoints else [
+                "Try the new query-listing and query-offer endpoints",
+                "They might support better contract filtering",
+                "Check if different parameter names work"
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+def debug_listings(contract):
+    """Debug listings endpoint to see what's happening"""
+    try:
+        is_valid, result = validate_contract_address(contract)
+        if not is_valid:
+            return jsonify({'from flask import Flask, jsonify, request
 import requests
 import hmac
 import hashlib
@@ -119,14 +319,16 @@ def make_okx_request(endpoint, params=None, contract_address=None):
 def root():
     return jsonify({
         "status": "healthy",
-        "service": "OKX NFT Backend - Parameter Testing",
-        "version": "3.3.0-simple",
+        "service": "OKX NFT Backend - Debugging Listings",
+        "version": "3.4.0-debug",
         "timestamp": datetime.utcnow().isoformat(),
         "endpoints": [
             "/api - health check",
-            "/api/test-params/<contract> - test different parameters", 
             "/api/contracts - known contracts",
-            "/api/nfts/<contract> - get NFTs"
+            "/api/test-params/<contract> - test different parameters", 
+            "/api/test-new-endpoints/<contract> - test NEW query-listing & query-offer endpoints",
+            "/api/debug-listings/<contract> - debug listings endpoint",
+            "/api/nfts/<contract> - get NFTs with price sorting"
         ]
     })
 
@@ -157,6 +359,158 @@ def contracts():
     })
 
 @app.route('/api/test-params/<contract>')
+def debug_listings(contract):
+    """Debug listings endpoint to see what's happening"""
+    try:
+        is_valid, result = validate_contract_address(contract)
+        if not is_valid:
+            return jsonify({'success': False, 'error': result}), 400
+        
+        contract_address = result
+        
+        if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
+            return jsonify({
+                "success": False,
+                "error": "OKX API keys not configured"
+            }), 500
+        
+        debug_info = {
+            "contract_tested": contract_address,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Test listings endpoint with different limits
+        test_limits = ['10', '50', '100']
+        
+        for limit in test_limits:
+            print(f"🧪 Testing listings with limit: {limit}")
+            
+            listings_params = {
+                'chain': 'taiko',
+                'limit': limit
+            }
+            
+            listings_data = make_okx_request('/api/v5/mktplace/nft/markets/listings', listings_params, contract_address)
+            
+            debug_info[f"listings_limit_{limit}"] = {
+                "params_sent": listings_params,
+                "okx_response_code": listings_data.get('code') if listings_data else None,
+                "okx_message": listings_data.get('msg') if listings_data else None,
+                "has_data": bool(listings_data and listings_data.get('data')),
+                "raw_response_type": type(listings_data.get('data', {})).__name__ if listings_data else "None"
+            }
+            
+            if listings_data and listings_data.get('code') == 0:
+                response_data = listings_data.get('data', {})
+                if isinstance(response_data, dict) and 'data' in response_data:
+                    all_listings = response_data['data']
+                else:
+                    all_listings = response_data if isinstance(response_data, list) else []
+                
+                debug_info[f"listings_limit_{limit}"]["total_listings"] = len(all_listings)
+                
+                # Analyze contracts in listings
+                contract_analysis = {}
+                sample_listings = []
+                
+                for i, listing in enumerate(all_listings[:10]):  # First 10 for analysis
+                    listing_contract = (
+                        listing.get('assetContract', {}).get('contractAddress', '') or
+                        listing.get('contractAddress', '') or
+                        listing.get('asset', {}).get('contractAddress', '') or
+                        'NOT_FOUND'
+                    ).lower()
+                    
+                    if listing_contract in contract_analysis:
+                        contract_analysis[listing_contract] += 1
+                    else:
+                        contract_analysis[listing_contract] = 1
+                    
+                    sample_listings.append({
+                        "tokenId": listing.get('tokenId'),
+                        "price": listing.get('price') or listing.get('listingPrice'),
+                        "contract": listing_contract[-10:] if listing_contract != 'NOT_FOUND' else 'NOT_FOUND',
+                        "has_price": bool(listing.get('price') or listing.get('listingPrice'))
+                    })
+                
+                debug_info[f"listings_limit_{limit}"]["contract_distribution"] = contract_analysis
+                debug_info[f"listings_limit_{limit}"]["sample_listings"] = sample_listings
+                debug_info[f"listings_limit_{limit}"]["our_contract_count"] = contract_analysis.get(contract_address.lower(), 0)
+                
+            else:
+                debug_info[f"listings_limit_{limit}"]["total_listings"] = 0
+                debug_info[f"listings_limit_{limit}"]["error"] = "Failed to get listings data"
+        
+        # Test what assets endpoint gives us for comparison
+        assets_params = {
+            'chain': 'taiko',
+            'contractAddress': contract_address,
+            'limit': '10'
+        }
+        
+        assets_data = make_okx_request('/api/v5/mktplace/nft/asset/list', assets_params, contract_address)
+        
+        debug_info["assets_comparison"] = {
+            "params_sent": assets_params,
+            "okx_response_code": assets_data.get('code') if assets_data else None,
+            "has_data": bool(assets_data and assets_data.get('data'))
+        }
+        
+        if assets_data and assets_data.get('code') == 0:
+            response_data = assets_data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                assets_nfts = response_data['data']
+            else:
+                assets_nfts = response_data if isinstance(response_data, list) else []
+            
+            debug_info["assets_comparison"]["total_assets"] = len(assets_nfts)
+            debug_info["assets_comparison"]["sample_token_ids"] = [
+                nft.get('tokenId') for nft in assets_nfts[:5]
+            ]
+        
+        return jsonify({
+            "success": True,
+            "debug_data": debug_info,
+            "conclusion": {
+                "listings_endpoint_working": any(
+                    debug_info[f"listings_limit_{limit}"]["total_listings"] > 0 
+                    for limit in test_limits
+                    if f"listings_limit_{limit}" in debug_info
+                ),
+                "our_contract_has_listings": any(
+                    debug_info[f"listings_limit_{limit}"].get("our_contract_count", 0) > 0
+                    for limit in test_limits
+                    if f"listings_limit_{limit}" in debug_info
+                ),
+                "possible_issues": [
+                    "No listings exist for Taiko chain" if all(
+                        debug_info[f"listings_limit_{limit}"]["total_listings"] == 0 
+                        for limit in test_limits
+                        if f"listings_limit_{limit}" in debug_info
+                    ) else None,
+                    "No listings for our specific contract" if any(
+                        debug_info[f"listings_limit_{limit}"]["total_listings"] > 0 
+                        for limit in test_limits
+                        if f"listings_limit_{limit}" in debug_info
+                    ) and all(
+                        debug_info[f"listings_limit_{limit}"].get("our_contract_count", 0) == 0
+                        for limit in test_limits
+                        if f"listings_limit_{limit}" in debug_info
+                    ) else None,
+                    "OKX API authentication issues" if all(
+                        debug_info[f"listings_limit_{limit}"]["okx_response_code"] != 0
+                        for limit in test_limits
+                        if f"listings_limit_{limit}" in debug_info
+                    ) else None
+                ]
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 def test_parameters(contract):
     """Test different parameter combinations"""
     try:
@@ -488,9 +842,10 @@ def get_nfts(contract):
                 "sorting_applied": sort_by in ['price_asc', 'price_desc']
             },
             "okx_bug_info": {
-                "assets_endpoint": "working_perfectly",
-                "listings_endpoint": "ignores_contractAddress_but_used_for_prices",
-                "workaround": "token_id_matching_from_general_listings_pool"
+                "assets_endpoint": "working_perfectly_with_contractAddress",
+                "listings_endpoint": "works_correctly_with_ONLY_chain_parameter", 
+                "documentation_clarification": "listings accepts only 'chain' parameter per OKX docs",
+                "workaround": "manual_contract_filtering_from_all_chain_listings"
             },
             "timestamp": datetime.utcnow().isoformat()
         })
