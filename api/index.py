@@ -72,16 +72,21 @@ def create_fresh_okx_signature(timestamp, method, request_path, body='', query_s
         return ""
 
 def make_fresh_okx_request(endpoint, params=None, contract_address=None):
-    """Face request FRESH către OKX API"""
+    """Face request ULTRA FRESH către OKX API - ZERO CACHE"""
     try:
-        # FRESH timestamp + random
+        # ULTRA FRESH timestamp + multiple random elements
         timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         
-        # Add random param to force fresh
+        # Add multiple random params to FORCE fresh
         if not params:
             params = {}
-        params['_fresh'] = str(int(time.time() * 1000))
+        
+        # CRITICAL: Add contract address to cache-busting params
+        params['_fresh'] = str(int(time.time() * 1000000))  # Microsecond timestamp
         params['_rand'] = str(random.randint(100000, 999999))
+        params['_contract'] = contract_address  # Include contract in query to prevent cross-contamination
+        params['_ts'] = str(int(time.time()))
+        params['_nonce'] = str(random.randint(1000000, 9999999))
         
         query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
         
@@ -94,31 +99,58 @@ def make_fresh_okx_request(endpoint, params=None, contract_address=None):
             'OK-ACCESS-TIMESTAMP': timestamp,
             'OK-ACCESS-PASSPHRASE': OKX_PASSPHRASE,
             'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            
+            # EXTREME ANTI-CACHE HEADERS
+            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0',
             'Pragma': 'no-cache',
-            'Expires': '0',
-            'User-Agent': f'OKX-NFT-Client-{random.randint(1000, 9999)}'
+            'Expires': 'Thu, 01 Jan 1970 00:00:00 GMT',
+            'If-None-Match': '*',
+            'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT',
+            'X-Requested-With': 'XMLHttpRequest',
+            
+            # Vary user agent to avoid caching
+            'User-Agent': f'OKX-NFT-Client-{contract_address}-{random.randint(1000, 9999)}'
         }
         
         url = f"https://www.okx.com{endpoint}?{query_string}"
         
-        print(f"🔄 FRESH Request: {contract_address}")
+        print(f"🔄 ULTRA FRESH Request: {contract_address}")
+        print(f"📝 URL params include contract: {contract_address}")
         
-        # FRESH REQUEST
+        # FRESH REQUEST with no session reuse
         session = requests.Session()
+        session.headers.update({'Connection': 'close'})  # Force close connection
+        
         response = session.get(url, headers=headers, timeout=15)
         session.close()
         
         if response.status_code == 200:
             data = response.json()
-            print(f"✅ Response: {data.get('code', 'unknown')}")
+            print(f"✅ Response for {contract_address}: {data.get('code', 'unknown')}")
+            
+            # VERIFY that response is actually for the requested contract
+            response_data = data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                nfts = response_data['data']
+            else:
+                nfts = response_data if isinstance(response_data, list) else []
+            
+            # Log contract verification
+            if nfts and len(nfts) > 0:
+                sample_contract = (
+                    nfts[0].get('assetContract', {}).get('contractAddress', '') or
+                    nfts[0].get('contractAddress', '') or
+                    'NOT_FOUND'
+                ).lower()
+                print(f"🔍 Response contract check: requested={contract_address}, got={sample_contract}")
+            
             return data
         else:
-            print(f"❌ Error: {response.status_code}")
+            print(f"❌ Error for {contract_address}: {response.status_code}")
             return None
             
     except Exception as e:
-        print(f"❌ Request error: {e}")
+        print(f"❌ Request error for {contract_address}: {e}")
         return None
 
 @app.route('/')
@@ -134,6 +166,7 @@ def root():
             "/api - health check",
             "/api/test - test connection", 
             "/api/contracts - known contracts",
+            "/api/verify/<contract> - verify if contract exists",
             "/api/debug/<contract> - debug raw OKX data",
             "/api/nfts/<contract> - get NFTs",
             "/api/nfts/<contract>?sort_by=price_asc",
@@ -179,6 +212,138 @@ def contracts():
         ],
         "timestamp": datetime.utcnow().isoformat()
     })
+
+@app.route('/api/verify/<contract>')
+def verify_contract(contract):
+    """Verify if contract exists and has NFTs - ULTRA FRESH"""
+    try:
+        is_valid, result = validate_contract_address(contract)
+        if not is_valid:
+            return jsonify({
+                'success': False,
+                'error': result,
+                'provided_address': contract,
+                'verification': 'format_invalid'
+            }), 400
+        
+        contract_address = result
+        verification_id = f"verify_{int(time.time() * 1000)}_{random.randint(10000, 99999)}"
+        
+        print(f"🔍 VERIFICATION for contract: {contract_address} (ID: {verification_id})")
+        
+        if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
+            return jsonify({
+                "success": False,
+                "error": "OKX API keys not configured"
+            }), 500
+        
+        # Test both endpoints with ultra fresh requests
+        base_params = {
+            'chain': 'taiko',
+            'contractAddress': contract_address,
+            'limit': '5'
+        }
+        
+        # Test assets endpoint
+        print(f"🧪 Testing ASSETS endpoint for {contract_address}")
+        assets_data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', base_params, contract_address)
+        
+        # Test listings endpoint  
+        print(f"🧪 Testing LISTINGS endpoint for {contract_address}")
+        listings_data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', base_params, contract_address)
+        
+        # Analyze results
+        def analyze_endpoint_result(data, endpoint_name):
+            if not data:
+                return {
+                    "status": "failed",
+                    "error": "No response from OKX",
+                    "nft_count": 0
+                }
+            
+            if data.get('code') != 0:
+                return {
+                    "status": "error",
+                    "okx_code": data.get('code'),
+                    "okx_message": data.get('msg', ''),
+                    "nft_count": 0
+                }
+            
+            response_data = data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                nfts = response_data['data']
+            else:
+                nfts = response_data if isinstance(response_data, list) else []
+            
+            # Sample first NFT for analysis
+            sample_nft = None
+            contract_match = False
+            if nfts and len(nfts) > 0:
+                first_nft = nfts[0]
+                nft_contract = (
+                    first_nft.get('assetContract', {}).get('contractAddress', '') or
+                    first_nft.get('contractAddress', '') or
+                    first_nft.get('asset', {}).get('contractAddress', '') or
+                    'NOT_FOUND'
+                ).lower()
+                
+                contract_match = (nft_contract == contract_address.lower())
+                
+                sample_nft = {
+                    "tokenId": first_nft.get('tokenId'),
+                    "name": first_nft.get('name'),
+                    "has_price": bool(first_nft.get('price') or first_nft.get('listingPrice')),
+                    "contract_from_nft": nft_contract,
+                    "contract_matches": contract_match
+                }
+            
+            return {
+                "status": "success",
+                "okx_code": data.get('code'),
+                "nft_count": len(nfts),
+                "contract_match": contract_match,
+                "sample_nft": sample_nft
+            }
+        
+        assets_result = analyze_endpoint_result(assets_data, "assets")
+        listings_result = analyze_endpoint_result(listings_data, "listings")
+        
+        # Overall verification conclusion
+        contract_exists = (
+            (assets_result["status"] == "success" and assets_result["nft_count"] > 0) or
+            (listings_result["status"] == "success" and listings_result["nft_count"] > 0)
+        )
+        
+        has_listings = (listings_result["status"] == "success" and listings_result["nft_count"] > 0)
+        
+        return jsonify({
+            "success": True,
+            "contract_address": contract_address,
+            "verification_id": verification_id,
+            "ultra_fresh": True,
+            "verification_result": {
+                "contract_exists": contract_exists,
+                "has_listings": has_listings,
+                "recommended_endpoint": "listings" if has_listings else "assets" if contract_exists else "none"
+            },
+            "endpoint_tests": {
+                "assets": assets_result,
+                "listings": listings_result
+            },
+            "conclusion": {
+                "usable_for_browsing": assets_result["status"] == "success" and assets_result["nft_count"] > 0,
+                "usable_for_price_sorting": listings_result["status"] == "success" and listings_result["nft_count"] > 0,
+                "contract_filtering_needed": not (assets_result.get("contract_match", False) and listings_result.get("contract_match", False))
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "verification": "failed"
+        }), 500
 
 @app.route('/api/debug/<contract>')
 def debug_contract(contract):
@@ -355,23 +520,44 @@ def get_nfts(contract):
                     print(f"🔍 Assets filtering: {original_count} -> {len(nfts)} NFTs")
         
         if not data or data.get('code') != 0 or len(nfts) == 0:
+            # Additional check for invalid contract
+            error_msg = "Could not get NFTs from OKX"
+            if data and data.get('code') != 0:
+                error_msg = f"OKX API error: {data.get('code')} - {data.get('msg', 'Unknown error')}"
+            elif len(nfts) == 0:
+                error_msg = "No NFTs found - contract may not exist or have no listings"
+            
             return jsonify({
                 "success": False,
-                "error": "Could not get NFTs from OKX" if not data or data.get('code') != 0 else "No NFTs found for this contract",
+                "error": error_msg,
                 "contract_address": contract_address,
                 "endpoint_used": endpoint_used,
                 "request_id": request_id,
+                "contract_validation": {
+                    "format_valid": True,  # Passed initial validation
+                    "exists_on_okx": False,  # No NFTs found
+                    "possible_reasons": [
+                        "Contract address does not exist",
+                        "Contract has no NFTs",
+                        "Contract not indexed by OKX",
+                        "Typing error in contract address"
+                    ]
+                },
                 "debug": {
                     "okx_code": data.get('code') if data else 'no_response',
+                    "okx_message": data.get('msg') if data else 'no_response',
                     "nfts_returned": len(nfts),
-                    "sort_requested": sort_by
+                    "sort_requested": sort_by,
+                    "ultra_fresh_request": True,
+                    "timestamp": datetime.utcnow().isoformat()
                 },
                 "suggestions": [
+                    "Verify the contract address is correct",
                     "Try browsing mode (no sort_by parameter)",
-                    "Try known contracts: /api/contracts",
-                    "Contract might not have listings on OKX"
+                    "Try known working contracts: /api/contracts",
+                    "Check if contract exists on blockchain explorer"
                 ]
-            }), 500
+            }), 404
         
         print(f"📦 Using {len(nfts)} NFTs from {endpoint_used}")
         
