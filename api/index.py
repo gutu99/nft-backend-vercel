@@ -75,7 +75,43 @@ def root():
         ]
     })
 
-@app.route('/api/simple-test/<contract>')
+@app.route('/api/raw-debug/<contract>')
+def raw_debug(contract):
+    """Show EXACTLY what OKX returns - no processing"""
+    is_valid, result = validate_contract(contract)
+    if not is_valid:
+        return jsonify({'error': result}), 400
+    
+    contract_address = result
+    
+    # Raw test 1: What does listings return?
+    listings_params = {'chain': 'taiko', 'limit': '10'}
+    listings_raw = okx_request('/api/v5/mktplace/nft/markets/listings', listings_params)
+    
+    # Raw test 2: What does assets return?
+    assets_params = {'chain': 'taiko', 'contractAddress': contract_address, 'limit': '5'}
+    assets_raw = okx_request('/api/v5/mktplace/nft/asset/list', assets_params)
+    
+    return jsonify({
+        "contract_tested": contract_address,
+        "raw_responses": {
+            "listings_endpoint": {
+                "params_sent": listings_params,
+                "raw_response": listings_raw,
+                "explanation": "This shows EXACTLY what OKX returns for listings"
+            },
+            "assets_endpoint": {
+                "params_sent": assets_params, 
+                "raw_response": assets_raw,
+                "explanation": "This shows EXACTLY what OKX returns for assets"
+            }
+        },
+        "what_to_look_for": {
+            "in_listings": "Look for ANY items with 'price' field",
+            "in_assets": "Look if ANY assets have price data", 
+            "contract_matching": f"Look if any items have contractAddress = {contract_address}"
+        }
+    })
 def simple_test(contract):
     """Ultra simple test of new endpoints"""
     is_valid, result = validate_contract(contract)
@@ -118,151 +154,142 @@ def simple_test(contract):
     })
 
 @app.route('/api/nfts/<contract>')
-def get_nfts_final(contract):
-    """Final working version with price sorting"""
+def get_nfts_with_metadata(contract):
+    """Get NFTs with proper parameters like the old working version"""
     is_valid, result = validate_contract(contract)
     if not is_valid:
         return jsonify({'error': result}), 400
     
     contract_address = result
     limit = int(request.args.get('limit', 12))
+    page = int(request.args.get('page', 1))
     sort_by = request.args.get('sort_by', 'none')
+    fetch_metadata = request.args.get('fetch_metadata', 'true')
     
-    # Step 1: Get NFTs using assets endpoint (confirmed perfect)
-    assets_params = {
+    # Use the SAME parameters as the old working version
+    params = {
         'chain': 'taiko',
         'contractAddress': contract_address,
-        'limit': str(min(limit * 2, 50))  # Get more to ensure we have enough after filtering
+        'limit': str(limit),
+        'page': str(page),
+        'fetch_metadata': fetch_metadata,  # KEY PARAMETER!
+        'sort_by': sort_by if sort_by != 'none' else None
     }
     
-    assets_data = okx_request('/api/v5/mktplace/nft/asset/list', assets_params)
+    # Remove None values
+    params = {k: v for k, v in params.items() if v is not None}
     
-    if not assets_data or assets_data.get('code') != 0:
+    print(f"🔍 Using OLD WORKING parameters: {params}")
+    
+    # Try assets endpoint first with the proper parameters
+    assets_data = okx_request('/api/v5/mktplace/nft/asset/list', params)
+    
+    if assets_data and assets_data.get('code') == 0:
+        print(f"✅ Assets endpoint worked with metadata params")
+        response_data = assets_data.get('data', {})
+        nfts = response_data.get('data', []) if isinstance(response_data, dict) else response_data
+        
+        # Process NFTs and check for prices
+        processed_nfts = []
+        with_prices = 0
+        
+        for nft in nfts:
+            token_id = nft.get('tokenId', '')
+            name = nft.get('name', f'NFT #{token_id}')
+            image = nft.get('image', '')
+            
+            # Look for price in multiple possible fields
+            price = (nft.get('price') or 
+                    nft.get('listingPrice') or 
+                    nft.get('priceEth') or 
+                    nft.get('currentPrice') or
+                    nft.get('floorPrice'))
+            
+            if price:
+                try:
+                    price_num = float(price)
+                    if price_num > 1e10:  # Convert from wei
+                        price_num = price_num / 1e18
+                    price_display = f"{price_num:.6f}".rstrip('0').rstrip('.')
+                    with_prices += 1
+                    print(f"💰 Found price for token {token_id}: {price_display} ETH")
+                except:
+                    price_display = str(price)
+                    with_prices += 1
+            else:
+                price_display = None
+            
+            processed_nfts.append({
+                'tokenId': str(token_id),
+                'name': name,
+                'image': image,
+                'price': price_display,
+                'currency': 'ETH' if price_display else None,
+                'status': 'listed' if price_display else 'unlisted',
+                'contractAddress': contract_address,
+                'raw_price_data': {
+                    'price': nft.get('price'),
+                    'listingPrice': nft.get('listingPrice'),
+                    'priceEth': nft.get('priceEth'),
+                    'currentPrice': nft.get('currentPrice'),
+                    'floorPrice': nft.get('floorPrice')
+                }
+            })
+        
+        print(f"💰 Found {with_prices} NFTs with prices out of {len(processed_nfts)}")
+        
         return jsonify({
-            "success": False,
-            "error": "Could not get NFTs",
-            "contract": contract_address
-        }), 404
-    
-    # Process assets data
-    assets_response = assets_data.get('data', {})
-    all_nfts = assets_response.get('data', []) if isinstance(assets_response, dict) else assets_response
-    
-    # Filter NFTs by contract (extra safety)
-    contract_nfts = []
-    for nft in all_nfts:
-        nft_contract = (
-            nft.get('assetContract', {}).get('contractAddress', '') or
-            nft.get('contractAddress', '')
-        ).lower()
-        
-        if nft_contract == contract_address.lower():
-            contract_nfts.append(nft)
-    
-    print(f"📦 Found {len(contract_nfts)} NFTs for contract {contract_address}")
-    
-    # Step 2: Get price data if sorting by price
-    price_data = {}
-    if sort_by in ['price_asc', 'price_desc'] and len(contract_nfts) > 0:
-        print(f"💰 Getting price data for sorting...")
-        
-        # Use old listings endpoint (confirmed working with 5 items)
-        listings_params = {'chain': 'taiko', 'limit': '50'}
-        listings_data = okx_request('/api/v5/mktplace/nft/markets/listings', listings_params)
-        
-        if listings_data and listings_data.get('code') == 0:
-            listings_response = listings_data.get('data', {})
-            all_listings = listings_response.get('data', []) if isinstance(listings_response, dict) else listings_response
-            
-            print(f"💰 Got {len(all_listings)} total listings")
-            
-            # Create token ID set from our NFTs
-            our_token_ids = {str(nft.get('tokenId')) for nft in contract_nfts if nft.get('tokenId')}
-            
-            # Manual contract filtering + price matching
-            matched_prices = 0
-            for listing in all_listings:
-                # Check if listing is from our contract
-                listing_contract = (
-                    listing.get('assetContract', {}).get('contractAddress', '') or
-                    listing.get('contractAddress', '') or
-                    ''
-                ).lower()
-                
-                # Only process listings from our specific contract
-                if listing_contract == contract_address.lower():
-                    listing_token_id = str(listing.get('tokenId', ''))
-                    listing_price = listing.get('price') or listing.get('listingPrice')
-                    
-                    # Match price with our NFTs
-                    if listing_token_id in our_token_ids and listing_price:
-                        price_data[listing_token_id] = listing_price
-                        matched_prices += 1
-            
-            print(f"💰 Matched {matched_prices} prices for our contract")
-    
-    # Step 3: Process and enrich NFTs
-    processed_nfts = []
-    for nft in contract_nfts:
-        token_id = nft.get('tokenId', '')
-        name = nft.get('name', f'NFT #{token_id}')
-        image = nft.get('image', '')
-        
-        # Add price if available
-        price = None
-        if str(token_id) in price_data:
-            price_raw = price_data[str(token_id)]
-            try:
-                price_num = float(price_raw)
-                if price_num > 1e10:  # Convert from wei
-                    price_num = price_num / 1e18
-                price = f"{price_num:.6f}".rstrip('0').rstrip('.')
-            except:
-                price = str(price_raw)
-        
-        processed_nfts.append({
-            'tokenId': str(token_id),
-            'name': name,
-            'image': image,
-            'price': price,
-            'priceNumeric': float(price) if price else None,
-            'currency': 'ETH' if price else None,
-            'status': 'listed' if price else 'unlisted',
-            'contractAddress': contract_address
+            "success": True,
+            "data": processed_nfts,
+            "count": len(processed_nfts),
+            "contract_address": contract_address,
+            "params_used": params,
+            "price_info": {
+                "nfts_with_prices": with_prices,
+                "total_nfts": len(processed_nfts),
+                "price_coverage": f"{round(with_prices/len(processed_nfts)*100, 1)}%" if processed_nfts else "0%"
+            },
+            "metadata_fetch": fetch_metadata,
+            "timestamp": datetime.utcnow().isoformat()
         })
     
-    # Step 4: Apply sorting
-    if sort_by in ['price_asc', 'price_desc'] and len(processed_nfts) > 1:
-        def get_sort_price(nft):
-            price_num = nft.get('priceNumeric')
-            if price_num is None:
-                return 0 if sort_by == 'price_asc' else float('inf')
-            return price_num
-        
-        processed_nfts.sort(key=get_sort_price, reverse=(sort_by == 'price_desc'))
-        print(f"🔄 Applied sorting: {sort_by}")
+    # If assets failed, try listings with the same params
+    print(f"⚠️ Assets failed, trying listings with metadata params")
+    listings_data = okx_request('/api/v5/mktplace/nft/markets/listings', params)
     
-    # Step 5: Limit results
-    final_nfts = processed_nfts[:limit]
-    with_prices = sum(1 for nft in final_nfts if nft.get('price'))
+    if listings_data and listings_data.get('code') == 0:
+        response_data = listings_data.get('data', {})
+        nfts = response_data.get('data', []) if isinstance(response_data, dict) else response_data
+        
+        print(f"📋 Listings returned {len(nfts)} items with metadata params")
+        
+        # Same processing as above...
+        processed_nfts = []
+        for nft in nfts[:limit]:
+            token_id = nft.get('tokenId', '')
+            price = nft.get('price') or nft.get('listingPrice')
+            
+            processed_nfts.append({
+                'tokenId': str(token_id),
+                'name': nft.get('name', f'NFT #{token_id}'),
+                'image': nft.get('image', ''),
+                'price': price,
+                'contractAddress': contract_address
+            })
+        
+        return jsonify({
+            "success": True,
+            "data": processed_nfts,
+            "count": len(processed_nfts),
+            "source": "listings_with_metadata",
+            "params_used": params
+        })
     
     return jsonify({
-        "success": True,
-        "data": final_nfts,
-        "count": len(final_nfts),
-        "contract_address": contract_address,
-        "sort_by": sort_by,
-        "price_info": {
-            "nfts_with_prices": with_prices,
-            "total_nfts": len(final_nfts),
-            "price_coverage": f"{round(with_prices/len(final_nfts)*100, 1)}%" if final_nfts else "0%"
-        },
-        "endpoints_used": {
-            "assets": "perfect_contract_filtering",
-            "old_listings": "price_data_with_manual_filtering"
-        },
-        "timestamp": datetime.utcnow().isoformat()
-    })
+        "success": False,
+        "error": "No data from either endpoint with metadata params",
+        "params_tried": params
+    }), 404
 
 if __name__ == '__main__':
     app.run(debug=True)
