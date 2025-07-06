@@ -354,16 +354,18 @@ def get_nfts(contract):
             if nft_contract == contract_address.lower():
                 filtered_nfts.append(nft)
         
-        # TRY TO GET PRICE DATA (experimental approach)
+        # TRY TO GET PRICE DATA (correct approach based on OKX docs)
         price_data = {}
         if sort_by in ['price_asc', 'price_desc'] and len(filtered_nfts) > 0:
-            print(f"💰 Attempting to get price data for {len(filtered_nfts)} NFTs")
+            print(f"💰 Getting price data for {len(filtered_nfts)} NFTs using correct listings API")
             
-            # Try to get general listings and match by token IDs
+            # CORRECT: Use listings endpoint with ONLY chain parameter (per OKX docs)
             listings_params = {
-                'chain': 'taiko',
-                'limit': '50'  # Get more listings to increase match chances
+                'chain': 'taiko',  # ONLY required parameter per documentation
+                'limit': '100'  # Get more to increase match chances
             }
+            
+            print(f"📋 Listings request: chain=taiko, limit=100 (contract filtering will be done manually)")
             
             listings_data = make_okx_request('/api/v5/mktplace/nft/markets/listings', listings_params, contract_address)
             
@@ -374,25 +376,45 @@ def get_nfts(contract):
                 else:
                     all_listings = listings_response if isinstance(listings_response, list) else []
                 
+                print(f"📋 Got {len(all_listings)} total listings for Taiko chain")
+                
                 # Create token ID set from our valid NFTs
-                our_token_ids = {nft.get('tokenId') for nft in filtered_nfts if nft.get('tokenId')}
+                our_token_ids = {str(nft.get('tokenId')) for nft in filtered_nfts if nft.get('tokenId')}
+                print(f"🎯 Looking for prices for our token IDs: {list(our_token_ids)[:10]}...")
                 
-                # Try to match prices by token ID
+                # MANUAL CONTRACT FILTERING + PRICE MATCHING
                 matched_prices = 0
-                for listing in all_listings:
-                    listing_token_id = listing.get('tokenId')
-                    listing_price = listing.get('price') or listing.get('listingPrice')
-                    
-                    # If this token ID matches one of our NFTs, store the price
-                    if (listing_token_id and 
-                        str(listing_token_id) in our_token_ids and 
-                        listing_price):
-                        price_data[str(listing_token_id)] = listing_price
-                        matched_prices += 1
+                contract_specific_listings = 0
                 
-                print(f"💰 Matched prices for {matched_prices}/{len(our_token_ids)} NFTs")
+                for listing in all_listings:
+                    # Check if listing is from our contract
+                    listing_contract = (
+                        listing.get('assetContract', {}).get('contractAddress', '') or
+                        listing.get('contractAddress', '') or
+                        listing.get('asset', {}).get('contractAddress', '') or
+                        ''
+                    ).lower()
+                    
+                    # Only process listings from our specific contract
+                    if listing_contract == contract_address.lower():
+                        contract_specific_listings += 1
+                        
+                        listing_token_id = str(listing.get('tokenId', ''))
+                        listing_price = listing.get('price') or listing.get('listingPrice')
+                        
+                        # If this token ID matches one of our NFTs, store the price
+                        if listing_token_id in our_token_ids and listing_price:
+                            price_data[listing_token_id] = listing_price
+                            matched_prices += 1
+                            print(f"💰 Matched price for token {listing_token_id}: {listing_price}")
+                
+                print(f"🎯 Found {contract_specific_listings} listings for our contract")
+                print(f"💰 Matched prices for {matched_prices}/{len(our_token_ids)} of our NFTs")
+                
+            else:
+                print(f"❌ Listings request failed: {listings_data.get('code') if listings_data else 'no response'}")
         
-        # Process NFTs with price enrichment
+        # Process NFTs with correct price enrichment
         processed_nfts = []
         for i, nft in enumerate(filtered_nfts[:limit]):
             try:
@@ -407,13 +429,14 @@ def get_nfts(contract):
                     price_raw = price_data[str(token_id)]
                     try:
                         price_num = float(price_raw)
-                        if price_num > 1e10:  # Convert from wei
+                        if price_num > 1e10:  # Convert from wei if needed
                             price_num = price_num / 1e18
                         price = f"{price_num:.6f}".rstrip('0').rstrip('.')
-                        price_source = 'listings_matched'
+                        price_source = 'contract_specific_listing'
+                        print(f"💰 Token {token_id} has price: {price} ETH")
                     except:
                         price = str(price_raw)
-                        price_source = 'listings_raw'
+                        price_source = 'listing_raw'
                 
                 processed_nft = {
                     'id': f"{contract_address}_{token_id}",
