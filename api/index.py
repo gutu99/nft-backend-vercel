@@ -16,19 +16,31 @@ app = Flask(__name__)
 # Disable all caching
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
-# Enable CORS + No Cache Headers
+# Enable CORS + NUCLEAR No Cache Headers
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     
-    # FORCE NO CACHE
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    # NUCLEAR ANTI-CACHE - Every response is unique
+    current_time = time.time()
+    microseconds = int(current_time * 1000000)
+    
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0, no-transform, private'
     response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    response.headers['Last-Modified'] = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-    response.headers['ETag'] = f'"{random.randint(1000000, 9999999)}"'
+    response.headers['Expires'] = 'Thu, 01 Jan 1970 00:00:00 GMT'
+    response.headers['Last-Modified'] = 'Thu, 01 Jan 1970 00:00:00 GMT'
+    response.headers['ETag'] = f'"never-cache-{microseconds}"'
+    response.headers['Vary'] = 'User-Agent, Accept-Encoding, Authorization'
+    response.headers['X-Accel-Expires'] = '0'  # Nginx cache
+    response.headers['X-Cache-Control'] = 'no-cache'
+    response.headers['X-Fresh-Response'] = f'ultra-fresh-{microseconds}'
+    
+    # Vercel-specific no-cache headers
+    response.headers['Vercel-Cache'] = 'MISS'
+    response.headers['X-Vercel-Cache'] = 'MISS'
+    response.headers['CDN-Cache-Control'] = 'no-cache'
     
     return response
 
@@ -72,23 +84,48 @@ def create_fresh_okx_signature(timestamp, method, request_path, body='', query_s
         return ""
 
 def make_fresh_okx_request(endpoint, params=None, contract_address=None):
-    """Face request ULTRA FRESH către OKX API - ZERO CACHE"""
+    """Face request ULTRA FRESH către OKX API - NUCLEAR ANTI-CACHE"""
     try:
-        # ULTRA FRESH timestamp + multiple random elements
+        # NUCLEAR ANTI-CACHE: Include current time in EVERYTHING
+        current_time = time.time()
+        microseconds = int(current_time * 1000000)
+        
+        # FRESH timestamp cu timezone random pentru a confunda cache-ul
         timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         
-        # Add multiple random params to FORCE fresh
+        # NUCLEAR cache busting - include contract address in EVERY parameter
         if not params:
             params = {}
         
-        # CRITICAL: Add contract address to cache-busting params
-        params['_fresh'] = str(int(time.time() * 1000000))  # Microsecond timestamp
-        params['_rand'] = str(random.randint(100000, 999999))
-        params['_contract'] = contract_address  # Include contract in query to prevent cross-contamination
-        params['_ts'] = str(int(time.time()))
-        params['_nonce'] = str(random.randint(1000000, 9999999))
+        # CRITICAL: Modify the core parameters to include contract specificity
+        original_contract = params.get('contractAddress', contract_address)
         
-        query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+        # EXTREME cache busting with contract-specific parameters
+        params.update({
+            '_ultra_fresh': str(microseconds),
+            '_rand': str(random.randint(100000, 999999)),
+            '_contract_hash': str(hash(contract_address))[-8:],  # Contract-specific hash
+            '_ts_micro': str(microseconds),
+            '_nonce': str(random.randint(1000000, 9999999)),
+            '_cache_bust': f"{contract_address[-8:]}_{microseconds}",
+            '_request_id': f"req_{microseconds}_{random.randint(10000, 99999)}",
+            # CRITICAL: Make the chain also contract-specific to prevent cross-contamination
+            '_chain_bust': f"taiko_{contract_address[-4:]}",
+            '_endpoint_id': endpoint.replace('/', '_'),
+            
+            # Override the original contract to make it TRULY unique per request
+            'contractAddress': f"{original_contract}",  # Ensure fresh
+            'chain': 'taiko'  # Always set fresh
+        })
+        
+        # Build query string with extra randomization
+        query_parts = []
+        for k, v in params.items():
+            query_parts.append(f"{k}={v}")
+        
+        # Add a final random parameter that changes every millisecond
+        query_parts.append(f"_final_bust={int(time.time() * 1000000)}")
+        query_string = '&'.join(query_parts)
         
         # FRESH signature
         signature = create_fresh_okx_signature(timestamp, 'GET', endpoint, '', query_string)
@@ -100,57 +137,74 @@ def make_fresh_okx_request(endpoint, params=None, contract_address=None):
             'OK-ACCESS-PASSPHRASE': OKX_PASSPHRASE,
             'Content-Type': 'application/json',
             
-            # EXTREME ANTI-CACHE HEADERS
-            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0',
+            # NUCLEAR ANTI-CACHE HEADERS
+            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0, no-transform',
             'Pragma': 'no-cache',
             'Expires': 'Thu, 01 Jan 1970 00:00:00 GMT',
-            'If-None-Match': '*',
+            'Last-Modified': 'Thu, 01 Jan 1970 00:00:00 GMT',
+            'If-None-Match': f'"never-match-{microseconds}"',
             'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT',
             'X-Requested-With': 'XMLHttpRequest',
+            'X-Cache-Bust': f'contract-{contract_address[-8:]}-{microseconds}',
+            'X-Request-ID': f'ultra-fresh-{microseconds}',
             
-            # Vary user agent to avoid caching
-            'User-Agent': f'OKX-NFT-Client-{contract_address}-{random.randint(1000, 9999)}'
+            # Contract-specific User-Agent to prevent cross-contamination
+            'User-Agent': f'OKX-NFT-Fresh-{contract_address[-8:]}-{microseconds}'
         }
         
-        url = f"https://www.okx.com{endpoint}?{query_string}"
+        # Build URL with NUCLEAR cache busting
+        base_url = f"https://www.okx.com{endpoint}"
+        url = f"{base_url}?{query_string}"
         
-        print(f"🔄 ULTRA FRESH Request: {contract_address}")
-        print(f"📝 URL params include contract: {contract_address}")
+        print(f"🚀 NUCLEAR FRESH Request: {contract_address}")
+        print(f"🔥 Cache bust ID: {microseconds}")
+        print(f"💣 Contract-specific: {contract_address[-8:]}")
         
-        # FRESH REQUEST with no session reuse
+        # NUCLEAR FRESH REQUEST
         session = requests.Session()
-        session.headers.update({'Connection': 'close'})  # Force close connection
         
-        response = session.get(url, headers=headers, timeout=15)
-        session.close()
+        # Force fresh connection
+        session.headers.update({
+            'Connection': 'close',  # Force close after request
+            'Keep-Alive': 'timeout=1, max=1'  # Minimal keep-alive
+        })
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"✅ Response for {contract_address}: {data.get('code', 'unknown')}")
+        # Disable session caching completely
+        session.trust_env = False
+        
+        try:
+            response = session.get(
+                url, 
+                headers=headers, 
+                timeout=15,
+                stream=False,
+                allow_redirects=True
+            )
             
-            # VERIFY that response is actually for the requested contract
-            response_data = data.get('data', {})
-            if isinstance(response_data, dict) and 'data' in response_data:
-                nfts = response_data['data']
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ NUCLEAR SUCCESS for {contract_address}: {data.get('code', 'unknown')}")
+                print(f"📊 Response size: {len(str(data))} chars")
+                
+                # CRITICAL: Verify response freshness by checking if it contains our cache-busting params
+                response_str = str(data)
+                if '_ultra_fresh' in response_str or str(microseconds) in response_str:
+                    print(f"⚡ CONFIRMED: Response contains our fresh markers")
+                else:
+                    print(f"⚠️ WARNING: Response might be cached (no fresh markers)")
+                
+                return data
             else:
-                nfts = response_data if isinstance(response_data, list) else []
-            
-            # Log contract verification
-            if nfts and len(nfts) > 0:
-                sample_contract = (
-                    nfts[0].get('assetContract', {}).get('contractAddress', '') or
-                    nfts[0].get('contractAddress', '') or
-                    'NOT_FOUND'
-                ).lower()
-                print(f"🔍 Response contract check: requested={contract_address}, got={sample_contract}")
-            
-            return data
-        else:
-            print(f"❌ Error for {contract_address}: {response.status_code}")
-            return None
+                print(f"❌ NUCLEAR ERROR for {contract_address}: {response.status_code}")
+                print(f"📄 Response: {response.text[:200]}")
+                return None
+                
+        finally:
+            # ALWAYS close session to prevent any caching
+            session.close()
             
     except Exception as e:
-        print(f"❌ Request error for {contract_address}: {e}")
+        print(f"💥 NUCLEAR REQUEST ERROR for {contract_address}: {e}")
         return None
 
 @app.route('/')
@@ -165,6 +219,7 @@ def root():
         "endpoints": [
             "/api - health check",
             "/api/test - test connection", 
+            "/api/test-random - test with random contracts",
             "/api/contracts - known contracts",
             "/api/verify/<contract> - verify if contract exists",
             "/api/debug/<contract> - debug raw OKX data",
@@ -213,7 +268,156 @@ def contracts():
         "timestamp": datetime.utcnow().isoformat()
     })
 
-@app.route('/api/verify/<contract>')
+@app.route('/api/test-random')
+def test_random_contracts():
+    """Test with completely random contracts to see if OKX ignores invalid contracts"""
+    try:
+        if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
+            return jsonify({
+                "success": False,
+                "error": "OKX API keys not configured"
+            }), 500
+        
+        # Test contracts: 1 valid, 1 similar invalid, 1 completely random
+        test_contracts = [
+            {
+                "name": "Valid Contract (Taikoon)",
+                "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
+                "expected": "should_return_real_nfts"
+            },
+            {
+                "name": "Similar Invalid Contract", 
+                "address": "0x4a04565016b200f7e08a4cabb2cda6e85bf56295",
+                "expected": "should_fail_or_return_empty"
+            },
+            {
+                "name": "Completely Random Contract",
+                "address": "0x1234567890123456789012345678901234567890", 
+                "expected": "should_definitely_fail"
+            },
+            {
+                "name": "Another Random Contract",
+                "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "expected": "should_definitely_fail"
+            }
+        ]
+        
+        results = {}
+        
+        for test in test_contracts:
+            contract_address = test["address"]
+            
+            # Test both endpoints
+            base_params = {
+                'chain': 'taiko',
+                'contractAddress': contract_address,
+                'limit': '3',
+                '_test': f'random_{int(time.time() * 1000)}',
+                '_contract_test': contract_address[-8:]  # Last 8 chars for uniqueness
+            }
+            
+            print(f"🧪 Testing contract: {test['name']} - {contract_address}")
+            
+            # Test assets
+            assets_data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', base_params, contract_address)
+            
+            # Test listings  
+            listings_data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', base_params, contract_address)
+            
+            def analyze_response(data, endpoint):
+                if not data:
+                    return {"status": "no_response", "nft_count": 0}
+                
+                if data.get('code') != 0:
+                    return {
+                        "status": "error",
+                        "okx_code": data.get('code'),
+                        "okx_message": data.get('msg', ''),
+                        "nft_count": 0
+                    }
+                
+                response_data = data.get('data', {})
+                if isinstance(response_data, dict) and 'data' in response_data:
+                    nfts = response_data['data']
+                else:
+                    nfts = response_data if isinstance(response_data, list) else []
+                
+                # Check if any NFT has contract info
+                contract_info = "no_nfts"
+                sample_token_ids = []
+                
+                if nfts:
+                    sample_token_ids = [nft.get('tokenId', 'unknown') for nft in nfts[:3]]
+                    
+                    # Check contract from first NFT
+                    first_nft = nfts[0]
+                    nft_contract = (
+                        first_nft.get('assetContract', {}).get('contractAddress', '') or
+                        first_nft.get('contractAddress', '') or
+                        'NOT_FOUND'
+                    ).lower()
+                    
+                    if nft_contract == contract_address.lower():
+                        contract_info = "matches_requested"
+                    elif nft_contract != 'NOT_FOUND' and nft_contract != '':
+                        contract_info = f"different_contract_{nft_contract[-8:]}"
+                    else:
+                        contract_info = "no_contract_info"
+                
+                return {
+                    "status": "success",
+                    "okx_code": data.get('code'),
+                    "nft_count": len(nfts),
+                    "contract_info": contract_info,
+                    "sample_token_ids": sample_token_ids
+                }
+            
+            results[test["name"]] = {
+                "contract": contract_address,
+                "expected": test["expected"],
+                "assets_result": analyze_response(assets_data, "assets"),
+                "listings_result": analyze_response(listings_data, "listings")
+            }
+        
+        # Analysis
+        analysis = {
+            "cache_issues": False,
+            "okx_ignores_invalid_contracts": False,
+            "identical_responses": False
+        }
+        
+        # Check if invalid contracts return same data as valid ones
+        valid_assets = results["Valid Contract (Taikoon)"]["assets_result"]
+        invalid_assets = results["Similar Invalid Contract"]["assets_result"]
+        random_assets = results["Completely Random Contract"]["assets_result"]
+        
+        if (valid_assets.get("nft_count", 0) > 0 and 
+            invalid_assets.get("nft_count", 0) > 0 and
+            valid_assets.get("sample_token_ids") == invalid_assets.get("sample_token_ids")):
+            analysis["identical_responses"] = True
+            analysis["cache_issues"] = True
+        
+        if (invalid_assets.get("nft_count", 0) > 0 or random_assets.get("nft_count", 0) > 0):
+            analysis["okx_ignores_invalid_contracts"] = True
+        
+        return jsonify({
+            "success": True,
+            "test_purpose": "Verify if OKX API ignores invalid contracts and returns cached/general data",
+            "test_results": results,
+            "analysis": analysis,
+            "conclusions": [
+                "If identical_responses=true: OKX has cache issues or ignores contractAddress",
+                "If okx_ignores_invalid_contracts=true: OKX returns data for any contract",
+                "If all invalid contracts return 0 NFTs: OKX validates contracts properly"
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 def verify_contract(contract):
     """Verify if contract exists and has NFTs - ULTRA FRESH"""
     try:
