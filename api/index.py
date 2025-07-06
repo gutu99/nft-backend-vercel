@@ -23,7 +23,7 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     
-    # FORCE NO CACHE - CRITICAL FOR FRESH DATA
+    # FORCE NO CACHE
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
@@ -52,7 +52,7 @@ def validate_contract_address(address):
     return True, address.lower()
 
 def create_fresh_okx_signature(timestamp, method, request_path, body='', query_string=''):
-    """Creează semnătura OKX FRESH pentru fiecare request"""
+    """Creează semnătura OKX FRESH"""
     try:
         if query_string:
             prehash = f'{timestamp}{method}{request_path}?{query_string}{body}'
@@ -72,20 +72,20 @@ def create_fresh_okx_signature(timestamp, method, request_path, body='', query_s
         return ""
 
 def make_fresh_okx_request(endpoint, params=None, contract_address=None):
-    """Face request COMPLET FRESH către OKX API - NO CACHE NICĂIERI"""
+    """Face request FRESH către OKX API"""
     try:
-        # FORCE FRESH - timestamp cu microsecunde + random
+        # FRESH timestamp + random
         timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         
         # Add random param to force fresh
         if not params:
             params = {}
-        params['_fresh'] = str(int(time.time() * 1000))  # Millisecond timestamp
-        params['_rand'] = str(random.randint(100000, 999999))  # Random number
+        params['_fresh'] = str(int(time.time() * 1000))
+        params['_rand'] = str(random.randint(100000, 999999))
         
         query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
         
-        # FRESH signature pentru fiecare cerere
+        # FRESH signature
         signature = create_fresh_okx_signature(timestamp, 'GET', endpoint, '', query_string)
         
         headers = {
@@ -94,123 +94,49 @@ def make_fresh_okx_request(endpoint, params=None, contract_address=None):
             'OK-ACCESS-TIMESTAMP': timestamp,
             'OK-ACCESS-PASSPHRASE': OKX_PASSPHRASE,
             'Content-Type': 'application/json',
-            
-            # FORCE FRESH HEADERS - CRITICAL
-            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache',
             'Expires': '0',
-            'If-None-Match': '*',
-            'If-Modified-Since': 'Thu, 01 Jan 1970 00:00:00 GMT',
-            
-            # User agent variation to avoid caching
             'User-Agent': f'OKX-NFT-Client-{random.randint(1000, 9999)}'
         }
         
         url = f"https://www.okx.com{endpoint}?{query_string}"
         
-        print(f"🔄 ULTRA FRESH OKX Request for contract {contract_address}")
-        print(f"📝 URL: {url}")
-        print(f"⏰ Timestamp: {timestamp}")
+        print(f"🔄 FRESH Request: {contract_address}")
         
-        # FORCE FRESH REQUEST - new session every time
+        # FRESH REQUEST
         session = requests.Session()
-        response = session.get(url, headers=headers, timeout=15, stream=False)
-        session.close()  # Close session immediately
+        response = session.get(url, headers=headers, timeout=15)
+        session.close()
         
         if response.status_code == 200:
             data = response.json()
-            response_code = data.get('code', 'unknown')
-            
-            # Debug info pentru fiecare contract
-            if isinstance(data.get('data'), dict) and 'data' in data['data']:
-                nft_count = len(data['data']['data'])
-                nfts = data['data']['data']
-            elif isinstance(data.get('data'), list):
-                nft_count = len(data['data'])
-                nfts = data['data']
-            else:
-                nft_count = 0
-                nfts = []
-                
-            print(f"✅ FRESH OKX Response for {contract_address}: code={response_code}, NFTs={nft_count}")
-            
-            # Log some token IDs to verify uniqueness
-            if nfts and len(nfts) > 0:
-                token_ids = [nft.get('tokenId', 'unknown') for nft in nfts[:3]]
-                print(f"🏷️ Sample Token IDs: {token_ids}")
-            
+            print(f"✅ Response: {data.get('code', 'unknown')}")
             return data
         else:
-            print(f"❌ OKX Error for {contract_address}: {response.status_code} - {response.text[:200]}")
+            print(f"❌ Error: {response.status_code}")
             return None
             
     except Exception as e:
-        print(f"❌ OKX Request error for {contract_address}: {e}")
+        print(f"❌ Request error: {e}")
         return None
-
-def convert_price(price_str):
-    """Convertește prețul la ETH"""
-    if not price_str:
-        return None
-    
-    try:
-        price_value = float(str(price_str).replace(',', ''))
-        if price_value <= 0:
-            return None
-        
-        # Convert wei to ETH if needed
-        if price_value > 1e10:
-            return price_value / 1e18
-        
-        return price_value
-    except:
-        return None
-
-def format_price(price_value):
-    """Format price pentru display"""
-    if not price_value:
-        return None
-    try:
-        if price_value < 0.001:
-            return f"{price_value:.8f}".rstrip('0').rstrip('.')
-        elif price_value < 1:
-            return f"{price_value:.6f}".rstrip('0').rstrip('.')
-        else:
-            return f"{price_value:.4f}".rstrip('0').rstrip('.')
-    except:
-        return str(price_value)
 
 @app.route('/')
 def root():
+    fresh_id = f"fresh_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     return jsonify({
         "status": "healthy",
-        "service": "OKX NFT Backend - ULTRA FRESH NO CACHE",
-        "version": "3.0.0-ultra-fresh",
-        "deployment": "vercel",
+        "service": "OKX NFT Backend - FRESH & SIMPLE",
+        "version": "3.1.0-simple",
+        "fresh_id": fresh_id,
         "timestamp": datetime.utcnow().isoformat(),
-        "random_id": random.randint(100000, 999999),  # Pentru a forța fresh response
-        "features": [
-            "✅ ULTRA FRESH: Zero cache la toate nivelele",
-            "✅ FRESH: Timestamp cu microsecunde + random",
-            "✅ FRESH: Session nou pentru fiecare request",
-            "✅ FRESH: Headers anti-cache hardcore",
-            "✅ FIXED: Contract-specific data garantat",
-            "✅ FIXED: Price sorting verificat și functional"
-        ],
-        "cache_busting": [
-            "🚫 Response headers anti-cache",
-            "🚫 Request headers anti-cache", 
-            "🚫 Random parameters per request",
-            "🚫 Fresh session per request",
-            "🚫 Microsecond timestamps"
-        ],
-        "available_endpoints": [
+        "endpoints": [
             "/api - health check",
-            "/api/test - test fresh connection", 
-            "/api/contracts/popular - get known working contracts",
-            "/api/nfts/<contract> - fresh NFT data",
-            "/api/nfts/<contract>?sort_by=price_asc - sort ascending",
-            "/api/nfts/<contract>?sort_by=price_desc - sort descending"
+            "/api/test - test connection", 
+            "/api/contracts - known contracts",
+            "/api/nfts/<contract> - get NFTs",
+            "/api/nfts/<contract>?sort_by=price_asc",
+            "/api/nfts/<contract>?sort_by=price_desc"
         ]
     })
 
@@ -218,300 +144,120 @@ def root():
 def api():
     return jsonify({
         "status": "healthy",
-        "service": "OKX NFT Backend API - ULTRA FRESH",
-        "version": "3.0.0-ultra-fresh",
-        "deployment": "vercel",
-        "timestamp": datetime.utcnow().isoformat(),
-        "fresh_id": f"fresh_{int(time.time() * 1000)}_{random.randint(1000, 9999)}",
-        "okx_integration": "ACTIVE",
-        "cache_status": "DISABLED_EVERYWHERE",
-        "environment": {
-            "has_okx_api_key": bool(OKX_API_KEY),
-            "has_okx_secret": bool(OKX_SECRET_KEY), 
-            "has_okx_passphrase": bool(OKX_PASSPHRASE),
-            "keys_ready": bool(OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE)
-        }
+        "service": "OKX NFT API",
+        "fresh_id": f"api_{int(time.time() * 1000)}",
+        "okx_keys_ready": bool(OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE),
+        "timestamp": datetime.utcnow().isoformat()
     })
 
 @app.route('/api/test')
 def test():
-    """Test OKX connection with ULTRA FRESH data"""
-    test_result = {
-        "success": True,
-        "message": "OKX integration test - ULTRA FRESH NO CACHE",
-        "test_id": f"test_{int(time.time() * 1000)}_{random.randint(10000, 99999)}",
-        "environment": {
-            "flask_working": True,
-            "vercel_deployment": True,
-            "cache_disabled": True,
-            "fresh_requests": True,
-            "okx_keys": {
-                "api_key": bool(OKX_API_KEY),
-                "secret_key": bool(OKX_SECRET_KEY),
-                "passphrase": bool(OKX_PASSPHRASE)
-            }
-        },
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    
-    # Test cu contracte cunoscute din Taiko
-    known_contracts = [
-        {
-            "name": "Taikoon",
-            "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
-            "description": "489 unique NFTs, Floor: 0.458 TAIKO_ETH"
-        },
-        {
-            "name": "Taikonauts", 
-            "address": "0x56b0d8d04de22f2539945258ddb288c123026775",
-            "description": "8887 unique NFTs, Floor: 0.0021 TAIKO_ETH"
-        }
-    ]
-    
-    # Test rapid cu primul contract cunoscut
-    if OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE:
-        test_contract = known_contracts[0]["address"]
-        params = {
-            'chain': 'taiko',
-            'contractAddress': test_contract,
-            'limit': '3'
-        }
-        
-        print(f"🧪 Testing FRESH OKX request for: {test_contract}")
-        okx_response = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', params, test_contract)
-        
-        if okx_response:
-            response_data = okx_response.get('data', {})
-            if isinstance(response_data, dict) and 'data' in response_data:
-                nfts = response_data['data']
-            else:
-                nfts = response_data if isinstance(response_data, list) else []
-            
-            test_result["okx_test"] = {
-                "status": "SUCCESS",
-                "response_code": okx_response.get('code'),
-                "contract_tested": test_contract,
-                "contract_name": known_contracts[0]["name"],
-                "nft_count": len(nfts),
-                "first_nft": nfts[0] if nfts else None,
-                "message": f"FRESH OKX API call successful! Found {len(nfts)} NFTs",
-                "fresh_timestamp": datetime.utcnow().isoformat()
-            }
-        else:
-            test_result["okx_test"] = {
-                "status": "FAILED",
-                "message": "OKX API call failed - check logs",
-                "contract_tested": test_contract
-            }
-    else:
-        test_result["okx_test"] = {
-            "status": "NO_KEYS",
-            "message": "OKX keys not configured"
-        }
-    
-    test_result["known_contracts"] = known_contracts
-    test_result["test_urls"] = [
-        f"/api/nfts/{contract['address']}?sort_by=price_asc&limit=4" 
-        for contract in known_contracts
-    ]
-    
-            return jsonify(test_result)
-
-@app.route('/api/contracts/popular')
-def popular_contracts():
-    """Lista de contracte populare pentru testing"""
     return jsonify({
         "success": True,
-        "popular_contracts": [
+        "message": "Backend working - FRESH REQUESTS",
+        "test_id": f"test_{int(time.time() * 1000)}",
+        "okx_keys": bool(OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE),
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+@app.route('/api/contracts')
+def contracts():
+    return jsonify({
+        "success": True,
+        "known_contracts": [
             {
                 "name": "Taikoon",
                 "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
-                "chain": "taiko",
-                "floor_price": "0.458 TAIKO_ETH",
-                "total_nfts": 489,
-                "test_urls": {
-                    "browse": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?limit=4",
-                    "price_asc": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
-                    "price_desc": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_desc&limit=4"
-                }
+                "test_url": f"/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4"
             },
             {
                 "name": "Taikonauts",
-                "address": "0x56b0d8d04de22f2539945258ddb288c123026775", 
-                "chain": "taiko",
-                "floor_price": "0.0021 TAIKO_ETH",
-                "total_nfts": 8887,
-                "test_urls": {
-                    "browse": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?limit=4",
-                    "price_asc": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4",
-                    "price_desc": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_desc&limit=4"
-                }
+                "address": "0x56b0d8d04de22f2539945258ddb288c123026775",
+                "test_url": f"/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4"
             }
-        ],
-        "instructions": [
-            "Testează cu contractele de mai sus pentru a verifica dacă backend-ul funcționează",
-            "Compară sort_by=price_asc vs price_desc pentru a verifica sortarea",
-            "Dacă contractul tău nu returnează NFT-uri, poate nu are listings pe OKX"
-        ],
-        "quick_tests": [
-            f"{request.url_root}api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
-            f"{request.url_root}api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4"
         ],
         "timestamp": datetime.utcnow().isoformat()
     })
 
 @app.route('/api/nfts/<contract>')
-def get_nfts_ultra_fresh(contract):
-    """Get ULTRA FRESH NFT data from OKX - NO CACHE ANYWHERE"""
+def get_nfts(contract):
+    """Get FRESH NFT data from OKX"""
     try:
-        # Validare contract
+        # Validate contract
         is_valid, result = validate_contract_address(contract)
         if not is_valid:
             return jsonify({
                 'success': False,
                 'error': result,
-                'provided_address': contract,
-                'fresh_id': f"error_{int(time.time() * 1000)}"
+                'provided_address': contract
             }), 400
         
         contract_address = result
         request_id = f"req_{int(time.time() * 1000)}_{random.randint(10000, 99999)}"
         
-        print(f"🚀 ULTRA FRESH NFT request for contract: {contract_address} (ID: {request_id})")
+        print(f"🚀 FRESH NFT request: {contract_address} (ID: {request_id})")
         
-        # Parametri
+        # Parameters
         limit = int(request.args.get('limit', 12))
-        sort_by = request.args.get('sort_by', 'price_asc')
+        sort_by = request.args.get('sort_by', 'none')
         
         # Check OKX keys
         if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
             return jsonify({
                 "success": False,
                 "error": "OKX API keys not configured",
-                "contract_address": contract_address,
-                "fresh_id": request_id
+                "request_id": request_id
             }), 500
         
-        # Base parameters cu anti-cache
+        # Base parameters
         base_params = {
             'chain': 'taiko',
             'contractAddress': contract_address,
             'limit': str(min(limit, 50))
         }
         
-        # SORTARE - încearcă ambele endpoint-uri cu debugging detaliat
+        # Try different endpoints
         data = None
         endpoint_used = "none"
-        okx_debug = []
         
+        # Try listings first if sorting by price
         if sort_by in ['price_asc', 'price_desc']:
-            print(f"💰 Attempting price sorting: {sort_by}")
-            
-            # Încearcă listings endpoint pentru sortare
-            sort_params = base_params.copy()
-            if sort_by == 'price_asc':
-                sort_params.update({'sortBy': 'price', 'orderBy': 'asc'})
-            else:
-                sort_params.update({'sortBy': 'price', 'orderBy': 'desc'})
-            
-            print(f"🔍 Trying listings with sort: {sort_params}")
-            data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', sort_params, contract_address)
-            endpoint_used = "listings_with_sort"
-            okx_debug.append(f"listings_with_sort: code={data.get('code') if data else 'failed'}")
-            
-            # Dacă nu funcționează, încearcă fără sort
-            if not data or data.get('code') != 0:
-                print(f"⚠️ Sorted listings failed, trying unsorted listings")
-                data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', base_params, contract_address)
-                endpoint_used = "listings_no_sort"
-                okx_debug.append(f"listings_no_sort: code={data.get('code') if data else 'failed'}")
+            print(f"💰 Trying listings for price sorting")
+            data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', base_params, contract_address)
+            endpoint_used = "listings"
         
-        # Fallback la assets endpoint
+        # Fallback to assets
         if not data or data.get('code') != 0:
-            print(f"🔄 Trying assets endpoint as fallback")
+            print(f"📦 Trying assets endpoint")
             data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', base_params, contract_address)
-            endpoint_used = "assets_fallback"
-            okx_debug.append(f"assets_fallback: code={data.get('code') if data else 'failed'}")
-        
-        # Ultimate fallback - încearcă cu chain diferit
-        if not data or data.get('code') != 0:
-            print(f"🌐 Trying with 'eth' chain as ultimate fallback")
-            eth_params = base_params.copy()
-            eth_params['chain'] = 'eth'
-            data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', eth_params, contract_address)
-            endpoint_used = "assets_eth_fallback"
-            okx_debug.append(f"assets_eth_fallback: code={data.get('code') if data else 'failed'}")
+            endpoint_used = "assets"
         
         if not data or data.get('code') != 0:
             return jsonify({
                 "success": False,
-                "error": "Nu s-au putut obține NFT-urile de la OKX",
-                "okx_response_code": data.get('code') if data else None,
+                "error": "Could not get NFTs from OKX",
                 "contract_address": contract_address,
                 "endpoint_used": endpoint_used,
-                "sort_attempted": sort_by,
-                "fresh_id": request_id,
-                "okx_debug_trail": okx_debug,
+                "request_id": request_id,
                 "suggestions": [
-                    "Verifică dacă contractul are NFT-uri listate pe OKX",
-                    "Testează cu contracte cunoscute: Taikoon sau Taikonauts",
-                    f"URL test: /api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc"
-                ],
-                "known_working_contracts": [
-                    {
-                        "name": "Taikoon",
-                        "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
-                        "test_url": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4"
-                    },
-                    {
-                        "name": "Taikonauts", 
-                        "address": "0x56b0d8d04de22f2539945258ddb288c123026775",
-                        "test_url": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4"
-                    }
-                ],
-                "debug": {
-                    "okx_response": data,
-                    "params_used": base_params,
-                    "ultra_fresh": True,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                    "Try known contracts: /api/contracts",
+                    "Contract might not have NFTs on OKX"
+                ]
             }), 500
         
-        # Procesează datele
+        # Process data
         response_data = data.get('data', {})
         if isinstance(response_data, dict) and 'data' in response_data:
             nfts = response_data['data']
         else:
             nfts = response_data if isinstance(response_data, list) else []
         
-        print(f"📦 Received {len(nfts)} NFTs for contract {contract_address}")
+        print(f"📦 Got {len(nfts)} NFTs")
         
-        # FILTRARE STRICTĂ pentru contract
-        if len(nfts) > 0:
-            original_count = len(nfts)
-            filtered_nfts = []
-            
-            for nft in nfts:
-                nft_contract = (
-                    nft.get('assetContract', {}).get('contractAddress', '') or
-                    nft.get('contractAddress', '') or
-                    nft.get('asset', {}).get('contractAddress', '') or
-                    nft.get('token', {}).get('contractAddress', '')
-                ).lower()
-                
-                if nft_contract == contract_address.lower():
-                    filtered_nfts.append(nft)
-            
-            nfts = filtered_nfts
-            print(f"🔍 CONTRACT FILTER: {original_count} -> {len(nfts)} NFTs after strict filtering")
-        
-        # CLIENT-SIDE SORTING pentru a garanta ordinea
+        # Client-side sorting if needed
         if sort_by in ['price_asc', 'price_desc'] and len(nfts) > 1:
-            def get_nft_price(nft):
-                price = (nft.get('price') or 
-                        nft.get('listingPrice') or 
-                        nft.get('priceEth') or 
-                        nft.get('priceWei'))
+            def get_price(nft):
+                price = nft.get('price') or nft.get('listingPrice') or nft.get('priceEth')
                 if not price:
                     return 0 if sort_by == 'price_asc' else float('inf')
                 try:
@@ -519,127 +265,79 @@ def get_nfts_ultra_fresh(contract):
                 except:
                     return 0 if sort_by == 'price_asc' else float('inf')
             
-            reverse_order = (sort_by == 'price_desc')
-            nfts.sort(key=get_nft_price, reverse=reverse_order)
-            print(f"🔄 Applied CLIENT-SIDE sorting: {sort_by}")
+            nfts.sort(key=get_price, reverse=(sort_by == 'price_desc'))
+            print(f"🔄 Applied sorting: {sort_by}")
         
-        # Procesează NFT-urile
+        # Process NFTs
         processed_nfts = []
         for i, nft in enumerate(nfts[:limit]):
             try:
                 token_id = nft.get('tokenId') or nft.get('id') or str(i + 1)
                 name = nft.get('name') or f"NFT #{token_id}"
-                image_url = nft.get('image') or nft.get('imageUrl') or nft.get('imageURI') or ''
-                description = nft.get('description') or f'NFT #{token_id} from {contract_address}'
+                image = nft.get('image') or nft.get('imageUrl') or nft.get('imageURI') or ''
                 
-                # Price extraction
-                price = (nft.get('price') or 
-                        nft.get('listingPrice') or 
-                        nft.get('priceEth') or 
-                        nft.get('priceWei'))
-                
+                # Price handling
+                price = nft.get('price') or nft.get('listingPrice') or nft.get('priceEth')
                 display_price = None
-                numeric_price = None
                 if price:
-                    numeric_price = convert_price(price)
-                    if numeric_price:
-                        display_price = format_price(numeric_price)
+                    try:
+                        price_num = float(price)
+                        if price_num > 1e10:  # Convert from wei
+                            price_num = price_num / 1e18
+                        display_price = f"{price_num:.6f}".rstrip('0').rstrip('.')
+                    except:
+                        display_price = str(price)
                 
                 processed_nft = {
-                    'id': f"{contract_address}_{token_id}_{request_id}",  # Unique per request
+                    'id': f"{contract_address}_{token_id}",
                     'tokenId': str(token_id),
                     'name': name,
-                    'image': image_url,
-                    'description': description,
-                    'attributes': nft.get('attributes', []),
+                    'image': image,
                     'price': display_price,
-                    'priceRaw': price,
-                    'priceNumeric': numeric_price,
                     'currency': 'ETH',
                     'status': 'listed' if price else 'unlisted',
-                    'orderId': nft.get('orderId'),
-                    'listingTime': nft.get('listingTime'),
-                    'seller': nft.get('seller') or nft.get('maker'),
                     'contractAddress': contract_address,
-                    'source': f'okx_ultra_fresh_{request_id}',
                     'fresh_timestamp': datetime.utcnow().isoformat()
                 }
                 
                 processed_nfts.append(processed_nft)
                 
             except Exception as e:
-                print(f"❌ Error processing NFT {i} for contract {contract_address}: {e}")
+                print(f"❌ Error processing NFT {i}: {e}")
                 continue
-        
-        print(f"🎯 Processed {len(processed_nfts)} FRESH NFTs for contract {contract_address}")
         
         return jsonify({
             "success": True,
             "data": processed_nfts,
             "count": len(processed_nfts),
             "contract_address": contract_address,
-            "limit": limit,
             "sort_by": sort_by,
-            "source": f"okx_ultra_fresh_api_{request_id}",
-            "deployment": "vercel",
-            "okx_response_code": data.get('code'),
-            "total_from_okx": len(nfts),
             "endpoint_used": endpoint_used,
-            "ultra_fresh": True,
             "request_id": request_id,
-            "cache_status": "DISABLED",
-            "debug_info": {
-                "params_sent": base_params,
-                "nfts_received": len(nfts),
-                "nfts_processed": len(processed_nfts),
-                "contract_specific": True,
-                "client_side_sort": sort_by in ['price_asc', 'price_desc']
-            },
+            "fresh": True,
             "timestamp": datetime.utcnow().isoformat()
         })
         
     except Exception as e:
-        print(f"❌ Error in get_nfts_ultra_fresh for contract {contract}: {e}")
+        print(f"❌ Error in get_nfts: {e}")
         return jsonify({
             "success": False,
             "error": str(e),
-            "contract_address": contract,
-            "deployment": "vercel",
-            "ultra_fresh": True,
-            "version": "3.0.0-ultra-fresh"
+            "contract": contract
         }), 500
 
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({
         "error": "Endpoint not found",
-        "available_endpoints": [
-            "/",
-            "/api", 
-            "/api/test",
-            "/api/contracts/popular",
-            "/api/nfts/<contract>",
-            "/api/nfts/<contract>?sort_by=price_asc",
-            "/api/nfts/<contract>?sort_by=price_desc"
-        ],
-        "example_test_urls": [
-            "/api/contracts/popular",
-            "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
-            "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_desc&limit=4"
-        ],
-        "deployment": "vercel",
-        "version": "3.0.0-ultra-fresh",
-        "fresh_id": f"404_{int(time.time() * 1000)}"
+        "available": ["/", "/api", "/api/test", "/api/contracts", "/api/nfts/<contract>"]
     }), 404
 
 @app.errorhandler(500)
 def server_error(error):
     return jsonify({
         "error": "Server error",
-        "message": str(error),
-        "deployment": "vercel",
-        "version": "3.0.0-ultra-fresh",
-        "fresh_id": f"500_{int(time.time() * 1000)}"
+        "message": str(error)
     }), 500
 
 if __name__ == '__main__':
