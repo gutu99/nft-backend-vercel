@@ -134,6 +134,7 @@ def root():
             "/api - health check",
             "/api/test - test connection", 
             "/api/contracts - known contracts",
+            "/api/debug/<contract> - debug raw OKX data",
             "/api/nfts/<contract> - get NFTs",
             "/api/nfts/<contract>?sort_by=price_asc",
             "/api/nfts/<contract>?sort_by=price_desc"
@@ -178,6 +179,84 @@ def contracts():
         ],
         "timestamp": datetime.utcnow().isoformat()
     })
+
+@app.route('/api/debug/<contract>')
+def debug_contract(contract):
+    """Debug raw OKX response for contract"""
+    try:
+        is_valid, result = validate_contract_address(contract)
+        if not is_valid:
+            return jsonify({'success': False, 'error': result}), 400
+        
+        contract_address = result
+        
+        if not (OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE):
+            return jsonify({
+                "success": False,
+                "error": "OKX API keys not configured"
+            }), 500
+        
+        params = {
+            'chain': 'taiko',
+            'contractAddress': contract_address,
+            'limit': '10'
+        }
+        
+        # Try both endpoints
+        listings_data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', params, contract_address)
+        assets_data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', params, contract_address)
+        
+        # Extract sample NFTs for analysis
+        def extract_sample_nfts(data, source):
+            if not data or data.get('code') != 0:
+                return f"Failed: {data.get('code') if data else 'no data'}"
+            
+            response_data = data.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                nfts = response_data['data']
+            else:
+                nfts = response_data if isinstance(response_data, list) else []
+            
+            sample = []
+            for nft in nfts[:3]:
+                sample.append({
+                    "tokenId": nft.get('tokenId'),
+                    "name": nft.get('name'),
+                    "price": nft.get('price') or nft.get('listingPrice'),
+                    "contractFromNFT": (
+                        nft.get('assetContract', {}).get('contractAddress', '') or
+                        nft.get('contractAddress', '') or
+                        nft.get('asset', {}).get('contractAddress', '') or
+                        nft.get('collection', {}).get('contractAddress', '') or
+                        "NOT_FOUND"
+                    ),
+                    "requestedContract": contract_address
+                })
+            
+            return {
+                "total_nfts": len(nfts),
+                "sample_nfts": sample
+            }
+        
+        return jsonify({
+            "success": True,
+            "contract_requested": contract_address,
+            "debug_data": {
+                "listings_endpoint": extract_sample_nfts(listings_data, "listings"),
+                "assets_endpoint": extract_sample_nfts(assets_data, "assets")
+            },
+            "raw_responses": {
+                "listings_code": listings_data.get('code') if listings_data else 'failed',
+                "assets_code": assets_data.get('code') if assets_data else 'failed'
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.route('/api/nfts/<contract>')
 def get_nfts(contract):
@@ -254,6 +333,30 @@ def get_nfts(contract):
         
         print(f"📦 Got {len(nfts)} NFTs")
         
+        # CONTRACT FILTERING - CRITICAL
+        if len(nfts) > 0:
+            original_count = len(nfts)
+            filtered_nfts = []
+            
+            for nft in nfts:
+                # Extract contract from different possible fields
+                nft_contract = (
+                    nft.get('assetContract', {}).get('contractAddress', '') or
+                    nft.get('contractAddress', '') or
+                    nft.get('asset', {}).get('contractAddress', '') or
+                    nft.get('token', {}).get('contractAddress', '') or
+                    nft.get('collection', {}).get('contractAddress', '')
+                ).lower()
+                
+                # Only keep NFTs from the requested contract
+                if nft_contract == contract_address.lower():
+                    filtered_nfts.append(nft)
+                else:
+                    print(f"🔍 Filtered out NFT from contract: {nft_contract}")
+            
+            nfts = filtered_nfts
+            print(f"🔍 CONTRACT FILTER: {original_count} -> {len(nfts)} NFTs after filtering")
+        
         # Client-side sorting if needed
         if sort_by in ['price_asc', 'price_desc'] and len(nfts) > 1:
             def get_price(nft):
@@ -261,12 +364,24 @@ def get_nfts(contract):
                 if not price:
                     return 0 if sort_by == 'price_asc' else float('inf')
                 try:
-                    return float(price)
+                    price_num = float(price)
+                    # Convert from wei if needed
+                    if price_num > 1e10:
+                        price_num = price_num / 1e18
+                    return price_num
                 except:
                     return 0 if sort_by == 'price_asc' else float('inf')
             
+            # Log prices before sorting for debugging
+            prices_before = [get_price(nft) for nft in nfts[:5]]
+            print(f"💰 Prices before sort: {prices_before}")
+            
             nfts.sort(key=get_price, reverse=(sort_by == 'price_desc'))
-            print(f"🔄 Applied sorting: {sort_by}")
+            
+            # Log prices after sorting
+            prices_after = [get_price(nft) for nft in nfts[:5]]
+            print(f"🔄 Prices after {sort_by}: {prices_after}")
+            print(f"✅ Applied sorting: {sort_by}")
         
         # Process NFTs
         processed_nfts = []
@@ -315,6 +430,12 @@ def get_nfts(contract):
             "endpoint_used": endpoint_used,
             "request_id": request_id,
             "fresh": True,
+            "debug": {
+                "total_from_okx": len(response_data.get('data', [])) if isinstance(response_data, dict) else len(response_data) if isinstance(response_data, list) else 0,
+                "after_contract_filter": len(nfts) if 'nfts' in locals() else 0,
+                "final_processed": len(processed_nfts),
+                "sorting_applied": sort_by in ['price_asc', 'price_desc']
+            },
             "timestamp": datetime.utcnow().isoformat()
         })
         
