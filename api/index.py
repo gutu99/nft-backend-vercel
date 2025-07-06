@@ -207,6 +207,7 @@ def root():
         "available_endpoints": [
             "/api - health check",
             "/api/test - test fresh connection", 
+            "/api/contracts/popular - get known working contracts",
             "/api/nfts/<contract> - fresh NFT data",
             "/api/nfts/<contract>?sort_by=price_asc - sort ascending",
             "/api/nfts/<contract>?sort_by=price_desc - sort descending"
@@ -253,7 +254,111 @@ def test():
         "timestamp": datetime.utcnow().isoformat()
     }
     
-    return jsonify(test_result)
+    # Test cu contracte cunoscute din Taiko
+    known_contracts = [
+        {
+            "name": "Taikoon",
+            "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
+            "description": "489 unique NFTs, Floor: 0.458 TAIKO_ETH"
+        },
+        {
+            "name": "Taikonauts", 
+            "address": "0x56b0d8d04de22f2539945258ddb288c123026775",
+            "description": "8887 unique NFTs, Floor: 0.0021 TAIKO_ETH"
+        }
+    ]
+    
+    # Test rapid cu primul contract cunoscut
+    if OKX_API_KEY and OKX_SECRET_KEY and OKX_PASSPHRASE:
+        test_contract = known_contracts[0]["address"]
+        params = {
+            'chain': 'taiko',
+            'contractAddress': test_contract,
+            'limit': '3'
+        }
+        
+        print(f"🧪 Testing FRESH OKX request for: {test_contract}")
+        okx_response = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', params, test_contract)
+        
+        if okx_response:
+            response_data = okx_response.get('data', {})
+            if isinstance(response_data, dict) and 'data' in response_data:
+                nfts = response_data['data']
+            else:
+                nfts = response_data if isinstance(response_data, list) else []
+            
+            test_result["okx_test"] = {
+                "status": "SUCCESS",
+                "response_code": okx_response.get('code'),
+                "contract_tested": test_contract,
+                "contract_name": known_contracts[0]["name"],
+                "nft_count": len(nfts),
+                "first_nft": nfts[0] if nfts else None,
+                "message": f"FRESH OKX API call successful! Found {len(nfts)} NFTs",
+                "fresh_timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            test_result["okx_test"] = {
+                "status": "FAILED",
+                "message": "OKX API call failed - check logs",
+                "contract_tested": test_contract
+            }
+    else:
+        test_result["okx_test"] = {
+            "status": "NO_KEYS",
+            "message": "OKX keys not configured"
+        }
+    
+    test_result["known_contracts"] = known_contracts
+    test_result["test_urls"] = [
+        f"/api/nfts/{contract['address']}?sort_by=price_asc&limit=4" 
+        for contract in known_contracts
+    ]
+    
+            return jsonify(test_result)
+
+@app.route('/api/contracts/popular')
+def popular_contracts():
+    """Lista de contracte populare pentru testing"""
+    return jsonify({
+        "success": True,
+        "popular_contracts": [
+            {
+                "name": "Taikoon",
+                "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
+                "chain": "taiko",
+                "floor_price": "0.458 TAIKO_ETH",
+                "total_nfts": 489,
+                "test_urls": {
+                    "browse": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?limit=4",
+                    "price_asc": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
+                    "price_desc": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_desc&limit=4"
+                }
+            },
+            {
+                "name": "Taikonauts",
+                "address": "0x56b0d8d04de22f2539945258ddb288c123026775", 
+                "chain": "taiko",
+                "floor_price": "0.0021 TAIKO_ETH",
+                "total_nfts": 8887,
+                "test_urls": {
+                    "browse": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?limit=4",
+                    "price_asc": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4",
+                    "price_desc": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_desc&limit=4"
+                }
+            }
+        ],
+        "instructions": [
+            "Testează cu contractele de mai sus pentru a verifica dacă backend-ul funcționează",
+            "Compară sort_by=price_asc vs price_desc pentru a verifica sortarea",
+            "Dacă contractul tău nu returnează NFT-uri, poate nu are listings pe OKX"
+        ],
+        "quick_tests": [
+            f"{request.url_root}api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
+            f"{request.url_root}api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4"
+        ],
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
 @app.route('/api/nfts/<contract>')
 def get_nfts_ultra_fresh(contract):
@@ -294,9 +399,10 @@ def get_nfts_ultra_fresh(contract):
             'limit': str(min(limit, 50))
         }
         
-        # SORTARE - încearcă ambele endpoint-uri
+        # SORTARE - încearcă ambele endpoint-uri cu debugging detaliat
         data = None
         endpoint_used = "none"
+        okx_debug = []
         
         if sort_by in ['price_asc', 'price_desc']:
             print(f"💰 Attempting price sorting: {sort_by}")
@@ -308,20 +414,33 @@ def get_nfts_ultra_fresh(contract):
             else:
                 sort_params.update({'sortBy': 'price', 'orderBy': 'desc'})
             
+            print(f"🔍 Trying listings with sort: {sort_params}")
             data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', sort_params, contract_address)
             endpoint_used = "listings_with_sort"
+            okx_debug.append(f"listings_with_sort: code={data.get('code') if data else 'failed'}")
             
             # Dacă nu funcționează, încearcă fără sort
             if not data or data.get('code') != 0:
                 print(f"⚠️ Sorted listings failed, trying unsorted listings")
                 data = make_fresh_okx_request('/api/v5/mktplace/nft/markets/listings', base_params, contract_address)
                 endpoint_used = "listings_no_sort"
+                okx_debug.append(f"listings_no_sort: code={data.get('code') if data else 'failed'}")
         
         # Fallback la assets endpoint
         if not data or data.get('code') != 0:
             print(f"🔄 Trying assets endpoint as fallback")
             data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', base_params, contract_address)
             endpoint_used = "assets_fallback"
+            okx_debug.append(f"assets_fallback: code={data.get('code') if data else 'failed'}")
+        
+        # Ultimate fallback - încearcă cu chain diferit
+        if not data or data.get('code') != 0:
+            print(f"🌐 Trying with 'eth' chain as ultimate fallback")
+            eth_params = base_params.copy()
+            eth_params['chain'] = 'eth'
+            data = make_fresh_okx_request('/api/v5/mktplace/nft/asset/list', eth_params, contract_address)
+            endpoint_used = "assets_eth_fallback"
+            okx_debug.append(f"assets_eth_fallback: code={data.get('code') if data else 'failed'}")
         
         if not data or data.get('code') != 0:
             return jsonify({
@@ -332,6 +451,24 @@ def get_nfts_ultra_fresh(contract):
                 "endpoint_used": endpoint_used,
                 "sort_attempted": sort_by,
                 "fresh_id": request_id,
+                "okx_debug_trail": okx_debug,
+                "suggestions": [
+                    "Verifică dacă contractul are NFT-uri listate pe OKX",
+                    "Testează cu contracte cunoscute: Taikoon sau Taikonauts",
+                    f"URL test: /api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc"
+                ],
+                "known_working_contracts": [
+                    {
+                        "name": "Taikoon",
+                        "address": "0x4a045c5016b200f7e08a4cabb2cda6e85bf53295",
+                        "test_url": "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4"
+                    },
+                    {
+                        "name": "Taikonauts", 
+                        "address": "0x56b0d8d04de22f2539945258ddb288c123026775",
+                        "test_url": "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_asc&limit=4"
+                    }
+                ],
                 "debug": {
                     "okx_response": data,
                     "params_used": base_params,
@@ -480,13 +617,15 @@ def not_found(error):
             "/",
             "/api", 
             "/api/test",
+            "/api/contracts/popular",
             "/api/nfts/<contract>",
             "/api/nfts/<contract>?sort_by=price_asc",
             "/api/nfts/<contract>?sort_by=price_desc"
         ],
         "example_test_urls": [
-            "/api/nfts/0x1234567890123456789012345678901234567890",
-            "/api/nfts/0x1234567890123456789012345678901234567890?sort_by=price_asc"
+            "/api/contracts/popular",
+            "/api/nfts/0x4a045c5016b200f7e08a4cabb2cda6e85bf53295?sort_by=price_asc&limit=4",
+            "/api/nfts/0x56b0d8d04de22f2539945258ddb288c123026775?sort_by=price_desc&limit=4"
         ],
         "deployment": "vercel",
         "version": "3.0.0-ultra-fresh",
